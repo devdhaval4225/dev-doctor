@@ -1,0 +1,5 @@
+{
+  "name": "MediNexus - Doctor Management System",
+  "description": "A comprehensive dashboard for doctors to manage appointments, patients, messages, and analytics with real-time data simulation.",
+  "requestFramePermissions": []
+}
