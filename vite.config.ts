@@ -37,15 +37,14 @@ export default defineConfig(({ mode }) => {
             manualChunks: (id) => {
               // Split node_modules into separate chunks
               if (id.includes('node_modules')) {
-                // React and React DOM together
-                if (id.includes('react') || id.includes('react-dom')) {
+                // Keep React, React DOM, and React Redux together to avoid useSyncExternalStore issues
+                if (id.includes('react') || id.includes('react-dom') || id.includes('react-redux')) {
                   return 'react-vendor';
                 }
-                // Redux related
-                if (id.includes('@reduxjs/toolkit') || id.includes('react-redux')) {
+                // Redux Toolkit (can be separate from react-redux)
+                if (id.includes('@reduxjs/toolkit')) {
                   return 'redux-vendor';
                 }
-                
                 // Router
                 if (id.includes('react-router')) {
                   return 'router-vendor';
