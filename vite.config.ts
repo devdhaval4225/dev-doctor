@@ -37,13 +37,16 @@ export default defineConfig(({ mode }) => {
             manualChunks: (id) => {
               // Split node_modules into separate chunks
               if (id.includes('node_modules')) {
-                // Keep React, React DOM, and React Redux together to avoid useSyncExternalStore issues
-                if (id.includes('react') || id.includes('react-dom') || id.includes('react-redux')) {
+                // Keep ALL React-related packages together to avoid useSyncExternalStore issues
+                // This includes React, ReactDOM, React Redux, and Redux Toolkit
+                // They must be in the same chunk to ensure React is available when react-redux loads
+                if (
+                  id.includes('react') || 
+                  id.includes('react-dom') || 
+                  id.includes('react-redux') ||
+                  id.includes('@reduxjs/toolkit')
+                ) {
                   return 'react-vendor';
-                }
-                // Redux Toolkit (can be separate from react-redux)
-                if (id.includes('@reduxjs/toolkit')) {
-                  return 'redux-vendor';
                 }
                 // Router
                 if (id.includes('react-router')) {
@@ -73,7 +76,9 @@ export default defineConfig(({ mode }) => {
             chunkFileNames: 'assets/js/[name]-[hash].js',
             entryFileNames: 'assets/js/[name]-[hash].js',
             assetFileNames: 'assets/[ext]/[name]-[hash].[ext]'
-          }
+          },
+          // Ensure proper external dependency handling
+          external: []
         }
       },
       // Public directory for static assets
