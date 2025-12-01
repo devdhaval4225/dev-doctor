@@ -1,18 +1,28 @@
 
 import axios from 'axios';
 import { store, logout } from '../redux/store';
+import { API_CONFIG } from '../config/api.config';
 
 // Get API base URL from environment variable or use default
-const getApiBaseURL = () => {
-  // Check for environment variable (set during build)
+const getApiBaseURL = (): string => {
+  // Priority 1: Environment variable (set during build via .env file)
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
-  // Check for runtime configuration (useful for production)
+  
+  // Priority 2: Runtime configuration (set in index.html or window object)
   if (typeof window !== 'undefined' && (window as any).__API_BASE_URL__) {
     return (window as any).__API_BASE_URL__;
   }
-  // Default to localhost for development
+  
+  // Priority 3: Config file
+  if (API_CONFIG.baseURL) {
+    return API_CONFIG.baseURL;
+  }
+  
+  // Priority 4: Default values
+  // Development: use localhost
+  // Production: use relative URL (same domain as frontend)
   return import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
 };
 
