@@ -12,6 +12,10 @@ export default defineConfig(({ mode }) => {
         // host: '0.0.0.0',
       },
       plugins: [react()],
+      optimizeDeps: {
+        include: ['react', 'react-dom', 'react-redux', '@reduxjs/toolkit'],
+        force: true, // Force re-optimization
+      },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
@@ -37,14 +41,27 @@ export default defineConfig(({ mode }) => {
             manualChunks: (id) => {
               // Split node_modules into separate chunks
               if (id.includes('node_modules')) {
-                // Keep ALL React-related packages together to avoid useSyncExternalStore issues
-                // This includes React, ReactDOM, React Redux, and Redux Toolkit
-                // They must be in the same chunk to ensure React is available when react-redux loads
+                // CRITICAL: React and ReactDOM must be in the same chunk and loaded FIRST
+                // This prevents "Cannot read properties of undefined (reading 'useSyncExternalStore')" errors
+                // Match React core more reliably (exclude react-router, react-redux, etc.)
                 if (
-                  id.includes('react') || 
-                  id.includes('react-dom') || 
+                  (id.includes('/react/') || id.includes('\\react\\')) &&
+                  !id.includes('react-router') &&
+                  !id.includes('react-redux') &&
+                  !id.includes('react-dom')
+                ) {
+                  return 'react-vendor';
+                }
+                // Match react-dom
+                if (id.includes('react-dom')) {
+                  return 'react-vendor';
+                }
+                // React Redux and Redux Toolkit must also be with React
+                // They depend on React's useSyncExternalStore hook
+                if (
                   id.includes('react-redux') ||
-                  id.includes('@reduxjs/toolkit')
+                  id.includes('@reduxjs/toolkit') ||
+                  id.includes('use-sync-external-store')
                 ) {
                   return 'react-vendor';
                 }
