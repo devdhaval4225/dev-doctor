@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
 import { RootState } from './redux/store';
@@ -14,6 +14,7 @@ import Patients from './pages/Patients';
 import Appointments from './pages/Appointments';
 import Login from './pages/Login';
 import Support from './pages/Support';
+import { Loader2 } from 'lucide-react';
 
 // ============================================================================
 // APPLICATION CONFIGURATION FLAG
@@ -46,6 +47,28 @@ const Layout = ({ children }: { children?: React.ReactNode }) => {
 
 const App = () => {
   const { isAuthenticated } = useSelector((state: RootState) => state.auth);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  // Ensure auth state is loaded from localStorage before rendering routes
+  useEffect(() => {
+    // Small delay to ensure Redux store is initialized
+    const timer = setTimeout(() => {
+      setIsInitialized(true);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Show loading screen while initializing
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-4" />
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <BrowserRouter

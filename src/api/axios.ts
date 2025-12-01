@@ -1,6 +1,6 @@
 
 import axios from 'axios';
-import { store } from '../redux/store';
+import { store, logout } from '../redux/store';
 
 const api = axios.create({
   baseURL: 'http://localhost:3000/api',
@@ -36,7 +36,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       const state = store.getState();
       if (state.auth.isAuthenticated) {
-        store.dispatch({ type: 'auth/logout' });
+        store.dispatch(logout());
         window.location.href = '/login';
       }
     }

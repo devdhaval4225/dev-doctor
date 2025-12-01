@@ -10,17 +10,42 @@ interface AuthState {
   token: string | null;
 }
 
+// Load initial state from localStorage
+const loadAuthFromStorage = (): AuthState => {
+  try {
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      return { isAuthenticated: true, token };
+    }
+  } catch (error) {
+    console.error('Error loading auth from localStorage:', error);
+  }
+  return { isAuthenticated: false, token: null };
+};
+
 const authSlice = createSlice({
   name: 'auth',
-  initialState: { isAuthenticated: false, token: null } as AuthState,
+  initialState: loadAuthFromStorage(),
   reducers: {
     login: (state, action: PayloadAction<string>) => {
       state.isAuthenticated = true;
       state.token = action.payload;
+      // Save to localStorage
+      try {
+        localStorage.setItem('authToken', action.payload);
+      } catch (error) {
+        console.error('Error saving auth to localStorage:', error);
+      }
     },
     logout: (state) => {
       state.isAuthenticated = false;
       state.token = null;
+      // Clear from localStorage
+      try {
+        localStorage.removeItem('authToken');
+      } catch (error) {
+        console.error('Error removing auth from localStorage:', error);
+      }
     },
   },
 });
