@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       optimizeDeps: {
-        include: ['react', 'react-dom', 'react-redux', '@reduxjs/toolkit'],
+        include: ['react', 'react-dom', 'react-redux', '@reduxjs/toolkit', 'recharts'],
         force: true, // Force re-optimization
       },
       define: {
@@ -65,13 +65,14 @@ export default defineConfig(({ mode }) => {
                 ) {
                   return 'react-vendor';
                 }
+                // Recharts must be with React to avoid initialization errors
+                // It's a React component library and has dependencies on React
+                if (id.includes('recharts') || id.includes('react-smooth') || id.includes('react-transition-group')) {
+                  return 'react-vendor';
+                }
                 // Router
                 if (id.includes('react-router')) {
                   return 'router-vendor';
-                }
-                // Charts library (can be large)
-                if (id.includes('recharts')) {
-                  return 'charts-vendor';
                 }
                 // Icons library
                 if (id.includes('lucide-react')) {
