@@ -8,8 +8,8 @@ export default defineConfig(({ mode }) => {
       // index.html should be in the frontend root, not in src
       server: {
         port: 5000,
-        host: '::',
-        // host: '0.0.0.0',
+        // host: '::',
+        host: '0.0.0.0',
       },
       plugins: [react()],
       optimizeDeps: {
@@ -18,7 +18,8 @@ export default defineConfig(({ mode }) => {
       },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        'import.meta.env.VITE_API_BASE_URL': JSON.stringify('https://dev-doctor.vercel.app' || '')
       },
       resolve: {
         alias: {

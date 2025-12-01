@@ -2,8 +2,22 @@
 import axios from 'axios';
 import { store, logout } from '../redux/store';
 
+// Get API base URL from environment variable or use default
+const getApiBaseURL = () => {
+  // Check for environment variable (set during build)
+  if (import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  // Check for runtime configuration (useful for production)
+  if (typeof window !== 'undefined' && (window as any).__API_BASE_URL__) {
+    return (window as any).__API_BASE_URL__;
+  }
+  // Default to localhost for development
+  return import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
+};
+
 const api = axios.create({
-  baseURL: 'http://localhost:3000/api',
+  baseURL: getApiBaseURL(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -37,7 +51,9 @@ api.interceptors.response.use(
       const state = store.getState();
       if (state.auth.isAuthenticated) {
         store.dispatch(logout());
-        window.location.href = '/login';
+        // Use relative path to handle base path correctly
+        const basePath = import.meta.env.BASE_URL || '';
+        window.location.href = `${basePath}/login`.replace(/\/+/g, '/');
       }
     }
     

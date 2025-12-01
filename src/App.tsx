@@ -46,16 +46,29 @@ const Layout = ({ children }: { children?: React.ReactNode }) => {
 };
 
 const App = () => {
-  const { isAuthenticated } = useSelector((state: RootState) => state.auth);
+  const { isAuthenticated, token } = useSelector((state: RootState) => state.auth);
   const [isInitialized, setIsInitialized] = useState(false);
 
   // Ensure auth state is loaded from localStorage before rendering routes
   useEffect(() => {
-    // Small delay to ensure Redux store is initialized
-    const timer = setTimeout(() => {
+    // Check if we're in browser environment and store is ready
+    if (typeof window !== 'undefined') {
+      // Use requestAnimationFrame to ensure DOM is ready
+      const initCheck = () => {
+        // Store should be initialized synchronously, but give it a moment
+        // to ensure localStorage access is complete
+        setIsInitialized(true);
+      };
+      
+      // Use requestAnimationFrame for better timing in production
+      if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(initCheck);
+      } else {
+        setTimeout(initCheck, 10);
+      }
+    } else {
       setIsInitialized(true);
-    }, 0);
-    return () => clearTimeout(timer);
+    }
   }, []);
 
   // Show loading screen while initializing
@@ -70,8 +83,12 @@ const App = () => {
     );
   }
 
+  // Get base path from environment or use default
+  const basePath = import.meta.env.BASE_URL || '/';
+
   return (
     <BrowserRouter
+      basename={basePath}
       future={{
         v7_startTransition: true,
         v7_relativeSplatPath: true,

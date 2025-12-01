@@ -12,13 +12,19 @@ interface AuthState {
 
 // Load initial state from localStorage
 const loadAuthFromStorage = (): AuthState => {
+  // Check if we're in a browser environment
+  if (typeof window === 'undefined') {
+    return { isAuthenticated: false, token: null };
+  }
+  
   try {
     const token = localStorage.getItem('authToken');
-    if (token) {
+    if (token && token.trim() !== '') {
       return { isAuthenticated: true, token };
     }
   } catch (error) {
-    console.error('Error loading auth from localStorage:', error);
+    // localStorage might be blocked in some environments (e.g., private browsing, some browsers)
+    console.warn('Error loading auth from localStorage:', error);
   }
   return { isAuthenticated: false, token: null };
 };
@@ -31,20 +37,26 @@ const authSlice = createSlice({
       state.isAuthenticated = true;
       state.token = action.payload;
       // Save to localStorage
-      try {
-        localStorage.setItem('authToken', action.payload);
-      } catch (error) {
-        console.error('Error saving auth to localStorage:', error);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('authToken', action.payload);
+        } catch (error) {
+          console.warn('Error saving auth to localStorage:', error);
+          // Continue even if localStorage fails
+        }
       }
     },
     logout: (state) => {
       state.isAuthenticated = false;
       state.token = null;
       // Clear from localStorage
-      try {
-        localStorage.removeItem('authToken');
-      } catch (error) {
-        console.error('Error removing auth from localStorage:', error);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('authToken');
+        } catch (error) {
+          console.warn('Error removing auth from localStorage:', error);
+          // Continue even if localStorage fails
+        }
       }
     },
   },
