@@ -4,6 +4,8 @@ import { useSelector, useDispatch } from 'react-redux';
 import { RootState, setUser } from '../redux/store';
 import { apiService } from '../services/api';
 import { User as UserIcon, Clock, Shield, Bell, Camera, Upload, Smartphone, Mail, Monitor, LogOut, Copy, Trash2, Plus, RefreshCw, Save, X, Activity, Lock } from 'lucide-react';
+import PhoneInput from '../components/PhoneInput';
+import { parsePhoneNumber, isValidPhoneNumber, isPossiblePhoneNumber } from 'react-phone-number-input';
 
 const Toggle = ({ checked, onChange }: { checked: boolean; onChange: () => void }) => (
   <button 
@@ -18,7 +20,17 @@ const Toggle = ({ checked, onChange }: { checked: boolean; onChange: () => void 
 const Settings = () => {
   const { user } = useSelector((state: RootState) => state.data);
   const dispatch = useDispatch();
-  const [activeTab, setActiveTab] = useState<'profile' | 'availability' | 'security' | 'notifications'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'availability' | 'security'>('profile');
+  
+  // Image upload state
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const avatarInputRef = React.useRef<HTMLInputElement>(null);
+  const coverInputRef = React.useRef<HTMLInputElement>(null);
+  
+  // Phone number state
+  const [phoneNumber, setPhoneNumber] = useState<string | undefined>(user?.mobile_number);
+  const [phoneError, setPhoneError] = useState<string>('');
 
   // --- Availability State (Advanced) ---
   const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -81,13 +93,13 @@ const Settings = () => {
   const [manualTime, setManualTime] = useState('09:00');
 
   // Notification Preferences State
-  const [notificationPrefs, setNotificationPrefs] = useState({
-      emailAlerts: true,
-      smsAlerts: false,
-      appointmentReminders: true,
-      marketingEmails: false,
-      securityAlerts: true
-  });
+  // const [notificationPrefs, setNotificationPrefs] = useState({
+  //     emailAlerts: true,
+  //     smsAlerts: false,
+  //     appointmentReminders: true,
+  //     marketingEmails: false,
+  //     securityAlerts: true
+  // });
 
   // Security State
   const [twoFactor, setTwoFactor] = useState(false);
@@ -97,6 +109,7 @@ const Settings = () => {
         try {
             const data = await apiService.user.getProfile();
             dispatch(setUser(data));
+            setPhoneNumber(data.mobile_number);
         } catch(e) {
             console.error("Failed to load user profile", e);
         }
@@ -104,10 +117,109 @@ const Settings = () => {
     loadProfile();
   }, [dispatch]);
 
+  // Update phone number when user changes
+  useEffect(() => {
+    if (user?.mobile_number) {
+      setPhoneNumber(user.mobile_number);
+    }
+  }, [user?.mobile_number]);
+
   if (!user) return <div className="p-6 flex items-center justify-center h-full"><span className="text-gray-500">Loading settings...</span></div>;
 
   const handleSaveProfile = async () => {
+      // Validate phone number before saving
+      if (!phoneNumber) {
+          alert('Please enter a phone number');
+          return;
+      }
+      
+      if (!isValidPhoneNumber(phoneNumber)) {
+          alert('Please enter a valid mobile number');
+          return;
+      }
+      
+      try {
+          // Update profile with phone number
+          const updatedUser = await apiService.user.updateProfile({
+              mobile_number: phoneNumber,
+          });
+          dispatch(setUser(updatedUser));
       alert('Profile saved successfully!');
+      } catch (error) {
+          console.error('Failed to save profile:', error);
+          alert('Failed to save profile. Please try again.');
+      }
+  };
+
+  // Image upload handlers
+  const handleAvatarUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image size must be less than 5MB');
+      return;
+    }
+
+    setUploadingAvatar(true);
+    try {
+      const result = await apiService.user.uploadProfileImage(file, 'avatar');
+      dispatch(setUser(result.user));
+    } catch (error) {
+      console.error('Failed to upload avatar:', error);
+    } finally {
+      setUploadingAvatar(false);
+      // Reset input
+      if (avatarInputRef.current) {
+        avatarInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleCoverUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    // Validate file size (5MB max)
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Image size must be less than 5MB');
+      return;
+    }
+
+    setUploadingCover(true);
+    try {
+      const result = await apiService.user.uploadProfileImage(file, 'cover_image');
+      dispatch(setUser(result.user));
+    } catch (error) {
+      console.error('Failed to upload cover image:', error);
+    } finally {
+      setUploadingCover(false);
+      // Reset input
+      if (coverInputRef.current) {
+        coverInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleAvatarClick = () => {
+    avatarInputRef.current?.click();
+  };
+
+  const handleCoverClick = () => {
+    coverInputRef.current?.click();
   };
 
   // Availability Helpers
@@ -209,7 +321,7 @@ const Settings = () => {
             <div className="flex flex-col gap-1 px-4">
                 <TabButton id="profile" icon={UserIcon} label="My Profile" />
                 <TabButton id="availability" icon={Clock} label="Availability" />
-                <TabButton id="notifications" icon={Bell} label="Notifications" />
+                {/* <TabButton id="notifications" icon={Bell} label="Notifications" /> */}
                 <TabButton id="security" icon={Shield} label="Security" />
             </div>
        </div>
@@ -225,30 +337,72 @@ const Settings = () => {
                     
                     {/* Cover & Profile Image */}
                     <div className="relative mb-24 group">
+                        {/* Hidden file inputs */}
+                        <input
+                            type="file"
+                            ref={coverInputRef}
+                            onChange={handleCoverUpload}
+                            accept="image/*"
+                            className="hidden"
+                        />
+                        <input
+                            type="file"
+                            ref={avatarInputRef}
+                            onChange={handleAvatarUpload}
+                            accept="image/*"
+                            className="hidden"
+                        />
+                        
                         <div className="h-56 w-full bg-gray-100 rounded-2xl overflow-hidden relative border border-gray-200">
-                             {user.coverImage ? (
-                                <img src={user.coverImage} alt="Cover" className="w-full h-full object-cover" />
+                             {user.cover_image ? (
+                                <img src={user.cover_image} alt="Cover" className="w-full h-full object-cover" />
                              ) : (
                                 <div className="w-full h-full bg-gradient-to-r from-blue-400 to-indigo-500"></div>
                              )}
+                             {uploadingCover && (
+                                <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                    <div className="text-white flex items-center gap-2">
+                                        <RefreshCw className="w-5 h-5 animate-spin" />
+                                        <span>Uploading...</span>
+                                    </div>
+                                </div>
+                             )}
                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
-                             <button className="absolute top-4 right-4 bg-white/90 text-gray-700 hover:text-blue-600 px-4 py-2 rounded-xl backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all shadow-sm flex items-center gap-2 text-sm font-medium">
-                                <Upload className="w-4 h-4" /> Edit Cover
+                             <button 
+                                onClick={handleCoverClick}
+                                disabled={uploadingCover}
+                                className="absolute top-4 right-4 bg-white/90 text-gray-700 hover:text-blue-600 px-4 py-2 rounded-xl backdrop-blur-sm opacity-0 group-hover:opacity-100 transition-all shadow-sm flex items-center gap-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+                                <Upload className="w-4 h-4" /> {uploadingCover ? 'Uploading...' : 'Edit Cover'}
                              </button>
                         </div>
                         
                         <div className="absolute -bottom-16 left-8">
                             <div className="relative group/avatar">
                                 <div className="w-32 h-32 rounded-full border-4 border-white shadow-xl overflow-hidden bg-white">
+                                    {user.avatar ? (
                                     <img 
                                         src={user.avatar} 
                                         alt="Profile" 
                                         className="w-full h-full object-cover"
                                     />
+                                    ) : (
+                                        <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                                            <UserIcon className="w-12 h-12 text-gray-400" />
+                                        </div>
+                                    )}
                                 </div>
-                                <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity cursor-pointer text-white">
+                                {uploadingAvatar && (
+                                    <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center">
+                                        <RefreshCw className="w-6 h-6 text-white animate-spin" />
+                                </div>
+                                )}
+                                <button
+                                    onClick={handleAvatarClick}
+                                    disabled={uploadingAvatar}
+                                    className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover/avatar:opacity-100 transition-opacity cursor-pointer text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
                                     <Camera className="w-8 h-8" />
-                                </div>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -269,11 +423,45 @@ const Settings = () => {
                                     </div>
                                 </div>
                                 <div>
-                                    <label className="block text-sm font-medium text-gray-700 mb-2">Phone Number</label>
-                                    <div className="relative">
-                                        <Smartphone className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-                                        <input type="tel" defaultValue={user.mobileNumber} className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-gray-900" />
-                                    </div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Phone Number <span className="text-red-500">*</span>
+                                    </label>
+                                    <PhoneInput
+                                        value={phoneNumber}
+                                        onChange={(value) => {
+                                            setPhoneNumber(value);
+                                            setPhoneError('');
+                                            
+                                            // Validate phone number
+                                            if (value) {
+                                                if (!isPossiblePhoneNumber(value)) {
+                                                    setPhoneError('Please enter a valid mobile number');
+                                                } else if (!isValidPhoneNumber(value)) {
+                                                    setPhoneError('Invalid phone number format');
+                                                } else {
+                                                    // Check if it's a mobile number (basic check)
+                                                    try {
+                                                        const phone = parsePhoneNumber(value);
+                                                        // Some countries don't distinguish mobile/landline in metadata
+                                                        // So we'll just validate it's a valid phone number
+                                                        setPhoneError('');
+                                                    } catch (e) {
+                                                        setPhoneError('Invalid phone number');
+                                                    }
+                                                }
+                                            } else {
+                                                setPhoneError('Phone number is required');
+                                            }
+                                        }}
+                                        defaultCountry="IN"
+                                        placeholder="Enter mobile number"
+                                    />
+                                    {phoneError && (
+                                        <p className="mt-1 text-sm text-red-600">{phoneError}</p>
+                                    )}
+                                    {phoneNumber && !phoneError && isValidPhoneNumber(phoneNumber) && (
+                                        <p className="mt-1 text-sm text-green-600">✓ Valid mobile number</p>
+                                    )}
                                 </div>
                             </div>
 
@@ -454,7 +642,7 @@ const Settings = () => {
                 </div>
             )}
 
-            {activeTab === 'notifications' && (
+            {/* {activeTab === 'notifications' && (
                 <div className="p-8 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-300">
                      <div className="mb-8">
                         <h2 className="text-2xl font-bold text-gray-900">Notification Preferences</h2>
@@ -507,7 +695,7 @@ const Settings = () => {
                         </div>
                      </div>
                 </div>
-            )}
+            )} */}
 
             {activeTab === 'security' && (
                 <div className="p-8 max-w-5xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -549,7 +737,7 @@ const Settings = () => {
                             </div>
                             {twoFactor && (
                                 <div className="bg-blue-50 text-blue-800 p-4 rounded-xl text-sm border border-blue-100">
-                                    2FA is currently enabled via SMS to {user.mobileNumber}.
+                                    2FA is currently enabled via SMS to {user.mobile_number}.
                                 </div>
                             )}
                         </div>

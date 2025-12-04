@@ -12,7 +12,7 @@ const Sidebar = () => {
     { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
     { icon: Calendar, label: 'Appointments', path: '/appointments' },
     { icon: Users, label: 'My Patient', path: '/patients' },
-    { icon: MessageSquare, label: 'Message', path: '/messages' },
+    // { icon: MessageSquare, label: 'Message', path: '/messages' },
     { icon: Settings, label: 'Settings', path: '/settings' },
     { icon: HelpCircle, label: 'Support', path: '/support' },
   ];

@@ -27,7 +27,7 @@ import { Loader2 } from 'lucide-react';
  * 
  * Change this flag to switch between mock data and real API
  */
-export const USE_MOCK_DATA = true;
+export const USE_MOCK_DATA = false;
 
 const Layout = ({ children }: { children?: React.ReactNode }) => {
   return (

@@ -6,12 +6,12 @@ export interface User {
   doctorId?: string | number; // Frontend compatibility
   name: string;
   email: string;
-  mobileNumber: string;
+  mobile_number: string;
   address: string;
   role?: 'doctor' | 'patient';
   specialization?: string;
   avatar?: string; // Added to users table
-  coverImage?: string;
+  cover_image?: string;
   gender?: 'Male' | 'Female' | 'Other';
   lastVisitDate?: string;
   lastReminderDate?: string;
@@ -42,12 +42,15 @@ export interface DashboardAnalytics {
   totalPatient: string;
   clinicConsulting: string;
   videoConsulting: string;
+  todayConsulting: string;
 }
 
 export interface DashboardData {
   analytics: DashboardAnalytics;
   appointmentRequest: AppointmentRequest[];
   recentPatient: RecentPatient[];
+  patientGrowth?: Array<{ name: string; patients: number }>;
+  genderGrowth?: Array<{ name: string; male: number; female: number }>;
 }
 
 export interface Message {
@@ -77,9 +80,14 @@ export interface Patient {
   mobileNumber: string;
   email: string;
   gender: 'Male' | 'Female' | 'Other';
+  bloodGroup?: 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-';
+  age?: number;
   dateOfBirth?: string;
-  address: string;
+  address?: string;
+  city?: string;
+  state?: string;
   lastVisitDate?: string;
+  lastVisitDateTime?: string;
   lastReminderDate?: string;
   lastAppointmentDate?: string;
   appointmentDate?: string;
@@ -89,13 +97,20 @@ export interface Patient {
 
 export interface Appointment {
   appointmentId: string;
+  id?: string | number; // Backend uses id
   patientId?: string;
   patientName: string;
-  email: string;
-  dateTime: string;
+  email?: string;
+  date: string; // Primary field from visits table (DATEONLY)
+  dateTime?: string; // Backward compatibility
   status: 'Pending' | 'Confirmed' | 'Completed' | 'Cancelled';
-  type: 'Consulting' | 'Video';
+  appointment_type?: 'Consulting' | 'Video'; // Primary field from visits table
+  appointmentType?: 'Consulting' | 'Video'; // Backward compatibility
+  type?: 'Consulting' | 'Video'; // Backward compatibility
   notes?: string;
+  diagnosis?: string;
+  prescription?: string;
+  doctorId?: string;
 }
 
 export interface AvailabilitySlot {

@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
 import { RootState, setDashboardData, setPatients } from '../redux/store';
 import { apiService } from '../services/api';
@@ -10,22 +10,9 @@ import {
 } from 'recharts';
 import { Users, Calendar, Video, Activity, Clock, MoreHorizontal, MessageSquare, Plus, UserPlus, Search, Loader2, X, Mail, Phone, FileText, MapPin } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { connectSocket, joinDoctorRoom, onDashboardUpdate, onPatientsUpdate, disconnectSocket } from '../services/socketService';
 
-const dataGrowth = [
-  { name: '2019', patients: 400 },
-  { name: '2020', patients: 300 },
-  { name: '2021', patients: 550 },
-  { name: '2022', patients: 800 },
-  { name: '2023', patients: 1200 },
-];
-
-const dataGender = [
-  { name: '2019', male: 200, female: 200 },
-  { name: '2020', male: 150, female: 150 },
-  { name: '2021', male: 300, female: 250 },
-  { name: '2022', male: 400, female: 400 },
-  { name: '2023', male: 600, female: 600 },
-];
+// Removed mock data - now using real data from API
 
 const StatCard = ({ icon: Icon, label, value, color }: any) => (
   <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4">
@@ -40,36 +27,70 @@ const StatCard = ({ icon: Icon, label, value, color }: any) => (
 );
 
 const Dashboard = () => {
-  const { dashboard, patients } = useSelector((state: RootState) => state.data);
+  const { dashboard, patients, user } = useSelector((state: RootState) => state.data);
+  const { token } = useSelector((state: RootState) => state.auth);
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<Patient[]>([]);
   const [isLoading, setIsLoading] = useState(!dashboard);
   const [viewingPatient, setViewingPatient] = useState<Patient | null>(null);
+  const hasLoadedRef = useRef(false);
 
+  // Load data function
+  const loadData = async () => {
+    try {
+      if (hasLoadedRef.current) {
+        return; // Prevent duplicate calls in StrictMode
+      }
+      
+      hasLoadedRef.current = true;
+      
+      // Fetch initial data
+      const dashboardData = await apiService.dashboard.getStats();
+      dispatch(setDashboardData(dashboardData));
+      
+      const patientsData = await apiService.patients.getAll();
+      dispatch(setPatients(patientsData));
+    } catch (error) {
+      console.error("Failed to load dashboard data", error);
+      hasLoadedRef.current = false; // Reset on error to allow retry
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Initial load and Socket.IO setup
   useEffect(() => {
-    const loadData = async () => {
-        try {
-            // Only fetch dashboard data if not already loaded
-            if (!dashboard) {
-                const dashboardData = await apiService.dashboard.getStats();
-                dispatch(setDashboardData(dashboardData));
-            }
-            
-            // Only fetch patients if not already loaded
-            if (patients.length === 0) {
-                const patientsData = await apiService.patients.getAll();
-                dispatch(setPatients(patientsData));
-            }
-        } catch (error) {
-            console.error("Failed to load dashboard data", error);
-        } finally {
-            setIsLoading(false);
-        }
-    };
     loadData();
-  }, [dispatch, dashboard, patients.length]);
+
+    // Connect to Socket.IO
+    if (token) {
+      const socket = connectSocket(token);
+      const doctorId = user?.userId || user?.doctorId || user?.id;
+      
+      if (doctorId) {
+        joinDoctorRoom(doctorId.toString());
+      }
+
+      // Listen for real-time updates
+      const unsubscribeDashboard = onDashboardUpdate((data) => {
+        console.log('📊 Dashboard update received:', data);
+        dispatch(setDashboardData(data));
+      });
+
+      const unsubscribePatients = onPatientsUpdate((data) => {
+        console.log('👥 Patients update received:', data);
+        dispatch(setPatients(data));
+      });
+
+      return () => {
+        unsubscribeDashboard();
+        unsubscribePatients();
+        disconnectSocket();
+      };
+    }
+  }, [dispatch, token, user]);
 
   useEffect(() => {
     if (searchTerm.trim() === '') {
@@ -96,10 +117,23 @@ const Dashboard = () => {
       return <div className="flex h-full items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>;
   }
 
-  // Sort Appointment Requests (Upcoming) by DateTime ASC
+  // Upcoming Appointments - already filtered to today's appointments from backend
   const upcomingAppointments = dashboard?.appointmentRequest 
-    ? [...dashboard.appointmentRequest].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime())
+    ? [...dashboard.appointmentRequest].sort((a, b) => {
+        const dateA = new Date(a.dateTime).getTime();
+        const dateB = new Date(b.dateTime).getTime();
+        return dateA - dateB;
+      })
     : [];
+  
+  // Get real graph data from API
+  const dataGrowth = dashboard?.patientGrowth || [];
+  const dataGender = dashboard?.genderGrowth || [];
+  
+  // Debug logging
+  console.log('Dashboard data:', dashboard);
+  console.log('Patient Growth Data:', dataGrowth);
+  console.log('Gender Growth Data:', dataGender);
 
   return (
     <div className="p-6 space-y-8 animate-fade-in relative">
@@ -175,9 +209,9 @@ const Dashboard = () => {
           color="bg-emerald-600" 
         />
         <StatCard 
-          icon={Video} 
-          label="Video Consulting" 
-          value={dashboard?.analytics.videoConsulting} 
+          icon={Calendar} 
+          label="Today Consulting" 
+          value={dashboard?.analytics.todayConsulting} 
           color="bg-orange-600" 
         />
       </div>
@@ -364,7 +398,18 @@ const Dashboard = () => {
                             <div className="space-y-2">
                                 <div className="flex justify-between text-sm">
                                     <span className="text-gray-500">Last Visit</span>
-                                    <span className="font-medium text-gray-900">{viewingPatient.lastVisitDate}</span>
+                                    <span className="font-medium text-gray-900">
+                                        {viewingPatient.lastVisitDateTime 
+                                            ? new Date(viewingPatient.lastVisitDateTime).toLocaleString('en-US', {
+                                                year: 'numeric',
+                                                month: 'short',
+                                                day: 'numeric',
+                                                hour: '2-digit',
+                                                minute: '2-digit',
+                                                hour12: true
+                                              })
+                                            : viewingPatient.lastVisitDate || 'N/A'}
+                                    </span>
                                 </div>
                                  <div className="flex justify-between text-sm">
                                     <span className="text-gray-500">Next Appt.</span>

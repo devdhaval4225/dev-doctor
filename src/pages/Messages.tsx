@@ -10,16 +10,22 @@ const Messages = () => {
   const dispatch = useDispatch();
   const [inputText, setInputText] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => {
+    // Prevent duplicate calls in StrictMode
+    if (hasLoadedRef.current && messages.length > 0) return;
+    
     const loadMessages = async () => {
         // Only fetch if messages are not already loaded
         if (messages.length === 0) {
             try {
+                hasLoadedRef.current = true;
                 const data = await apiService.messages.getAll();
                 dispatch(setMessages(data));
             } catch (e) {
                 console.error("Failed to load messages", e);
+                hasLoadedRef.current = false; // Reset on error to allow retry
             }
         }
     };

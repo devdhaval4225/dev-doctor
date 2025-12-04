@@ -2,6 +2,7 @@
 import axios from 'axios';
 import { store, logout } from '../redux/store';
 import { API_CONFIG } from '../config/api.config';
+import { encrypt } from '../utils/encryption';
 
 // Get API base URL from environment variable or use default
 const getApiBaseURL = (): string => {
@@ -27,14 +28,14 @@ const getApiBaseURL = (): string => {
 };
 
 const api = axios.create({
-  baseURL: getApiBaseURL(),
+  baseURL: `http://localhost:3000/api`,
   headers: {
     'Content-Type': 'application/json',
   },
   withCredentials: true, // Important: Enable cookies for authentication
 });
 
-// Request interceptor to add token
+// Request interceptor to add token and encrypt body
 api.interceptors.request.use(
   (config) => {
     const state = store.getState();
@@ -42,6 +43,21 @@ api.interceptors.request.use(
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
+    
+    // Encrypt request body for POST, PUT, PATCH requests
+    if (config.data && ['post', 'put', 'patch'].includes(config.method?.toLowerCase() || '')) {
+      try {
+        // Convert data to JSON string, encrypt it, and send as encrypted string
+        const jsonString = JSON.stringify(config.data);
+        const encrypted = encrypt(jsonString);
+        config.data = { encrypted }; // Send as { encrypted: "..." }
+        config.headers['Content-Type'] = 'application/json';
+      } catch (error) {
+        console.error('Encryption error:', error);
+        return Promise.reject(error);
+      }
+    }
+    
     return config;
   },
   (error) => {
