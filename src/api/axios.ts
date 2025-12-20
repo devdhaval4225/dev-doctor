@@ -44,8 +44,22 @@ api.interceptors.request.use(
       config.headers['Authorization'] = `Bearer ${token}`;
     }
     
-    // Encrypt request body for POST, PUT, PATCH requests
-    if (config.data && ['post', 'put', 'patch'].includes(config.method?.toLowerCase() || '')) {
+    // Preserve custom headers (like X-Timezone) that might be set in the request
+    // These should not be overwritten
+    
+    // Skip encryption for FormData (file uploads) - FormData should be sent as multipart/form-data
+    const isFormData = config.data instanceof FormData;
+    const isMultipartFormData = config.headers['Content-Type'] === 'multipart/form-data';
+    
+    // Only encrypt for 3 specific endpoints: login, register, and password change
+    const url = config.url || '';
+    const shouldEncrypt = 
+      url.includes('/auth/login') || 
+      url.includes('/auth/register') || 
+      (url.includes('/user/profile') && config.method?.toLowerCase() === 'put' && config.data && typeof config.data === 'object' && 'password' in config.data);
+    
+    // Encrypt request body only for specific endpoints
+    if (config.data && ['post', 'put', 'patch'].includes(config.method?.toLowerCase() || '') && !isFormData && !isMultipartFormData && shouldEncrypt) {
       try {
         // Convert data to JSON string, encrypt it, and send as encrypted string
         const jsonString = JSON.stringify(config.data);
@@ -56,6 +70,12 @@ api.interceptors.request.use(
         console.error('Encryption error:', error);
         return Promise.reject(error);
       }
+    }
+    
+    // For FormData, let axios set the Content-Type header automatically (it will include boundary)
+    if (isFormData) {
+      // Remove Content-Type header to let axios set it automatically with boundary
+      delete config.headers['Content-Type'];
     }
     
     return config;

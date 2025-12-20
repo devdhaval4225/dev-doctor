@@ -12,6 +12,9 @@ export interface User {
   specialization?: string;
   avatar?: string; // Added to users table
   cover_image?: string;
+  about?: string;
+  clinic_name?: string;
+  clinic_address?: string;
   gender?: 'Male' | 'Female' | 'Other';
   lastVisitDate?: string;
   lastReminderDate?: string;
@@ -111,6 +114,7 @@ export interface Appointment {
   diagnosis?: string;
   prescription?: string;
   doctorId?: string;
+  patient?: Patient | null; // Full patient object included from backend
 }
 
 export interface AvailabilitySlot {

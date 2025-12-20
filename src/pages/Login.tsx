@@ -1,16 +1,44 @@
 
-import React, { useState } from 'react';
-import { useDispatch } from 'react-redux';
-import { login, setUser } from '../redux/store';
+import React, { useState, useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, Link } from 'react-router-dom';
+import { RootState, login, setUser, addNotification } from '../redux/store';
 import { apiService } from '../services/api';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
-import { Loader2, Mail, Lock, Eye, EyeOff, Check } from 'lucide-react';
+import { Loader2, Mail, Lock, Eye, EyeOff, Check, Stethoscope, Calendar, Users, Activity, ArrowRight, Shield, Clock, Heart, Zap } from 'lucide-react';
 
 const Login = () => {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const { isAuthenticated, token } = useSelector((state: RootState) => state.auth);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [showLanding, setShowLanding] = useState(true);
+
+  // Redirect to dashboard if already authenticated
+  useEffect(() => {
+    const checkAuth = async () => {
+      // If user is authenticated, redirect to dashboard
+      if (isAuthenticated && token) {
+        // Optionally verify token is still valid
+        try {
+          // Try to get user profile to verify token is valid
+          await apiService.user.getProfile();
+          navigate('/', { replace: true });
+        } catch (error) {
+          // Token might be invalid, clear auth and show login
+          console.log('Token validation failed, showing login page');
+          setIsCheckingAuth(false);
+        }
+      } else {
+        setIsCheckingAuth(false);
+      }
+    };
+
+    checkAuth();
+  }, [isAuthenticated, token, navigate]);
 
   const handleSocialLogin = async (provider: string) => {
     try {
@@ -20,9 +48,17 @@ const Login = () => {
         if (result.user) {
           dispatch(setUser(result.user));
         }
+        // Redirect to dashboard after successful login
+        navigate('/', { replace: true });
     } catch (e) {
         console.error("Login failed", e);
-        alert("Social login is not fully supported in this demo environment.");
+        dispatch(addNotification({
+          id: `warning-${Date.now()}`,
+          title: 'Warning',
+          message: 'Social login is not fully supported in this demo environment.',
+          type: 'warning',
+          timestamp: new Date().toISOString()
+        }));
     }
   };
 
@@ -42,6 +78,8 @@ const Login = () => {
         if (result.user) {
           dispatch(setUser(result.user));
         }
+        // Redirect to dashboard after successful login
+        navigate('/', { replace: true });
       } catch (e) {
         console.error("Login failed", e);
         // Error notification is handled by apiService
@@ -51,10 +89,22 @@ const Login = () => {
     }
   });
 
+  // Show loading while checking authentication
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-4" />
+          <p className="text-gray-600">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {/* Left Side - Login Form */}
-      <div className="flex-1 flex flex-col justify-center py-12 px-4 sm:px-6 lg:flex-none lg:px-20 xl:px-24 bg-white z-10">
+      <div className="flex-1 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 lg:flex-none lg:px-20 xl:px-24 bg-white z-10">
         <div className="mx-auto w-full max-w-sm lg:w-96">
           <div className="text-center lg:text-left">
             <div className="flex justify-center lg:justify-start items-center gap-2 mb-8">
@@ -72,32 +122,6 @@ const Login = () => {
           </div>
 
           <div className="mt-8">
-            {/* Social Login Buttons */}
-            <div className="grid grid-cols-2 gap-3">
-                <button 
-                    onClick={() => handleSocialLogin('google')}
-                    className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors bg-white text-sm font-medium text-gray-700"
-                >
-                    <img src="https://www.svgrepo.com/show/475656/google-color.svg" className="w-5 h-5" alt="Google" />
-                    <span>Google</span>
-                </button>
-                <button 
-                    onClick={() => handleSocialLogin('microsoft')}
-                    className="flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors bg-white text-sm font-medium text-gray-700"
-                >
-                    <img src="https://www.svgrepo.com/show/303229/microsoft-sql-server-logo.svg" className="w-5 h-5" alt="Microsoft" />
-                    <span>Microsoft</span>
-                </button>
-            </div>
-
-            <div className="relative mt-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-200" />
-              </div>
-              <div className="relative flex justify-center text-sm">
-                <span className="px-2 bg-white text-gray-500">Or sign in with email</span>
-              </div>
-            </div>
 
             <div className="mt-6">
               <form onSubmit={formik.handleSubmit} className="space-y-5">
@@ -125,7 +149,7 @@ const Login = () => {
                     <p className="mt-1 text-xs text-red-600">{formik.errors.email}</p>
                   )}
                 </div>
-
+                  
                 <div>
                   <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
                     Password
@@ -196,9 +220,9 @@ const Login = () => {
             
              <p className="mt-8 text-center text-sm text-gray-600">
                 Don't have an account?{' '}
-                <a href="#" className="font-medium text-blue-600 hover:text-blue-500 hover:underline">
+                <Link to="/register" className="font-medium text-blue-600 hover:text-blue-500 hover:underline">
                     Register for free
-                </a>
+                </Link>
              </p>
           </div>
         </div>

@@ -117,3 +117,13 @@ export const onPatientUpdated = (callback: (data: any) => void) => {
   }
   return () => {};
 };
+
+export const onLoginActivitiesUpdate = (callback: (data: any) => void) => {
+  if (socket) {
+    socket.on('login-activities-update', callback);
+    return () => {
+      socket?.off('login-activities-update', callback);
+    };
+  }
+  return () => {};
+};

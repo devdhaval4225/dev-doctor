@@ -1,6 +1,5 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
@@ -9,130 +8,11 @@ export default defineConfig(({ mode }) => {
       // index.html should be in the frontend root, not in src
       server: {
         port: 5000,
-        // host: '::',
-        host: '0.0.0.0',
+        host: '::',
+        // host: '0.0.0.0',
       },
       plugins: [
-        react(),
-        VitePWA({
-          registerType: 'autoUpdate',
-          includeAssets: ['doctor-svgrepo-com.svg'],
-          manifest: {
-            name: 'MediNexus - Doctor Management System',
-            short_name: 'MediNexus',
-            description: 'Comprehensive doctor management system for managing patients, appointments, and medical records',
-            theme_color: '#3B82F6',
-            background_color: '#ffffff',
-            display: 'standalone',
-            orientation: 'portrait-primary',
-            scope: '/',
-            start_url: '/',
-            icons: [
-              {
-                src: '/doctor-svgrepo-com.svg',
-                sizes: 'any',
-                type: 'image/svg+xml',
-                purpose: 'any maskable'
-              }
-            ],
-            shortcuts: [
-              {
-                name: 'Dashboard',
-                short_name: 'Dashboard',
-                description: 'View dashboard',
-                url: '/',
-                icons: [{ src: '/doctor-svgrepo-com.svg', sizes: '192x192' }]
-              },
-              {
-                name: 'Patients',
-                short_name: 'Patients',
-                description: 'Manage patients',
-                url: '/patients',
-                icons: [{ src: '/doctor-svgrepo-com.svg', sizes: '192x192' }]
-              },
-              {
-                name: 'Appointments',
-                short_name: 'Appointments',
-                description: 'View appointments',
-                url: '/appointments',
-                icons: [{ src: '/doctor-svgrepo-com.svg', sizes: '192x192' }]
-              }
-            ]
-          },
-          workbox: {
-            // Only precache in production builds
-            globPatterns: mode === 'production' 
-              ? ['**/*.{js,css,html,ico,png,svg,woff,woff2,ttf,eot}']
-              : [],
-            globIgnores: ['**/node_modules/**/*', 'sw.js', 'workbox-*.js', '**/sw.js', '**/workbox-*.js'],
-            cleanupOutdatedCaches: true,
-            skipWaiting: true,
-            clientsClaim: true,
-            runtimeCaching: [
-              {
-                urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
-                handler: 'CacheFirst',
-                options: {
-                  cacheName: 'google-fonts-cache',
-                  expiration: {
-                    maxEntries: 10,
-                    maxAgeSeconds: 60 * 60 * 24 * 365 // 1 year
-                  },
-                  cacheableResponse: {
-                    statuses: [0, 200]
-                  }
-                }
-              },
-              {
-                urlPattern: /^https:\/\/fonts\.gstatic\.com\/.*/i,
-                handler: 'CacheFirst',
-                options: {
-                  cacheName: 'gstatic-fonts-cache',
-                  expiration: {
-                    maxEntries: 10,
-                    maxAgeSeconds: 60 * 60 * 24 * 365 // 1 year
-                  },
-                  cacheableResponse: {
-                    statuses: [0, 200]
-                  }
-                }
-              },
-              {
-                urlPattern: /^http:\/\/localhost:3000\/api\/.*/i,
-                handler: 'NetworkFirst',
-                options: {
-                  cacheName: 'api-cache',
-                  expiration: {
-                    maxEntries: 50,
-                    maxAgeSeconds: 60 * 5 // 5 minutes
-                  },
-                  networkTimeoutSeconds: 10,
-                  cacheableResponse: {
-                    statuses: [0, 200]
-                  }
-                }
-              },
-              {
-                urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp)$/,
-                handler: 'CacheFirst',
-                options: {
-                  cacheName: 'images-cache',
-                  expiration: {
-                    maxEntries: 100,
-                    maxAgeSeconds: 60 * 60 * 24 * 30 // 30 days
-                  }
-                }
-              }
-            ],
-            navigateFallback: '/index.html',
-            navigateFallbackDenylist: [/^\/api/]
-          },
-          devOptions: {
-            enabled: true,
-            type: 'module',
-            navigateFallback: 'index.html'
-          }
-        })
+        react()
       ],
       optimizeDeps: {
         include: ['react', 'react-dom', 'react-redux', '@reduxjs/toolkit', 'recharts'],
@@ -157,7 +37,7 @@ export default defineConfig(({ mode }) => {
         // Source map for production debugging (set to false for smaller builds)
         sourcemap: false,
         // Code splitting and chunk optimization
-        chunkSizeWarningLimit: 1000, // Increase warning limit to 1MB (optional)
+        chunkSizeWarningLimit: 1000, // Set warning limit to 1000KB (1MB)
         rollupOptions: {
           output: {
             // Manual chunk splitting for better caching and loading performance
@@ -166,17 +46,18 @@ export default defineConfig(({ mode }) => {
               if (id.includes('node_modules')) {
                 // CRITICAL: React and ReactDOM must be in the same chunk and loaded FIRST
                 // This prevents "Cannot read properties of undefined (reading 'useSyncExternalStore')" errors
-                // Match React core more reliably (exclude react-router, react-redux, etc.)
                 if (
                   (id.includes('/react/') || id.includes('\\react\\')) &&
                   !id.includes('react-router') &&
                   !id.includes('react-redux') &&
-                  !id.includes('react-dom')
+                  !id.includes('react-dom') &&
+                  !id.includes('react-datepicker') &&
+                  !id.includes('react-phone-number-input')
                 ) {
                   return 'react-vendor';
                 }
                 // Match react-dom
-                if (id.includes('react-dom')) {
+                if (id.includes('react-dom') && !id.includes('react-dom/')) {
                   return 'react-vendor';
                 }
                 // React Redux and Redux Toolkit must also be with React
@@ -188,29 +69,77 @@ export default defineConfig(({ mode }) => {
                 ) {
                   return 'react-vendor';
                 }
-                // Recharts must be with React to avoid initialization errors
-                // It's a React component library and has dependencies on React
-                if (id.includes('recharts') || id.includes('react-smooth') || id.includes('react-transition-group')) {
-                  return 'react-vendor';
-                }
-                // Router
+                // Router - separate chunk
                 if (id.includes('react-router')) {
                   return 'router-vendor';
                 }
-                // Icons library
+                // Recharts - large library, separate chunk
+                if (id.includes('recharts') || id.includes('react-smooth') || id.includes('react-transition-group')) {
+                  return 'charts-vendor';
+                }
+                // PDF generation libraries (very large) - separate chunk
+                if (id.includes('jspdf') || id.includes('html2canvas')) {
+                  return 'pdf-vendor';
+                }
+                // Icons library - separate chunk
                 if (id.includes('lucide-react')) {
                   return 'icons-vendor';
                 }
-                // Socket.io
+                // Socket.io - separate chunk
                 if (id.includes('socket.io')) {
                   return 'socket-vendor';
                 }
-                // Form libraries
+                // Form libraries - separate chunk
                 if (id.includes('formik') || id.includes('yup')) {
                   return 'form-vendor';
                 }
-                // Other vendor libraries
-                return 'vendor';
+                // Crypto libraries - separate chunk
+                if (id.includes('crypto-js')) {
+                  return 'crypto-vendor';
+                }
+                // Date picker - separate chunk
+                if (id.includes('react-datepicker')) {
+                  return 'datepicker-vendor';
+                }
+                // Phone number input - separate chunk
+                if (id.includes('react-phone-number-input')) {
+                  return 'phone-vendor';
+                }
+                // Axios (HTTP client) - separate chunk
+                if (id.includes('axios')) {
+                  return 'axios-vendor';
+                }
+                // Group remaining packages by size and type
+                // Large utility libraries
+                if (id.includes('lodash') || id.includes('moment') || id.includes('date-fns')) {
+                  return 'utils-vendor';
+                }
+                // Split remaining packages more aggressively
+                const match = id.match(/node_modules\/(@?[^\/\\]+)/);
+                if (match) {
+                  const packageName = match[1];
+                  // Handle scoped packages
+                  if (packageName.startsWith('@')) {
+                    const scopedMatch = id.match(/node_modules\/@([^\/\\]+)\/([^\/\\]+)/);
+                    if (scopedMatch) {
+                      const scope = scopedMatch[1];
+                      const pkg = scopedMatch[2];
+                      // Keep small scoped packages together, but limit chunk size
+                      return `vendor-${scope}-${pkg}`;
+                    }
+                    return `vendor-${packageName.replace('@', '').split('/')[0]}`;
+                  }
+                  // For non-scoped packages, group smaller ones together
+                  // Only create individual chunks for known large packages
+                  const largePackages = ['immer', 'redux-persist', 'reselect'];
+                  if (largePackages.some(pkg => id.includes(pkg))) {
+                    return `vendor-${packageName}`;
+                  }
+                  // Group smaller packages together to avoid too many chunks
+                  return 'vendor-misc';
+                }
+                // Fallback for any other node_modules
+                return 'vendor-misc';
               }
             },
             // Optimize chunk file names

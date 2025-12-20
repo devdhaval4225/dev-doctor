@@ -1,66 +1,276 @@
+/**
+ * Patients Page Component
+ * 
+ * Manages patient records with features:
+ * - Patient listing with search, sort, and pagination
+ * - Create/Edit patient modal
+ * - Inline editing for email and phone
+ * - CSV import functionality
+ * - Real-time updates via Socket.IO
+ */
 
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useSelector, useDispatch } from 'react-redux';
-import { RootState, setPatients, addPatient, updatePatient } from '../redux/store';
-import { apiService } from '../services/api';
-import { Patient } from '../types';
-import { getPatientId, findPatientById } from '../utils/patientUtils';
-import { Plus, Search, X, Edit, Loader2, ChevronLeft, ChevronRight, ArrowUp, ArrowDown, Clock, FileText, Upload, Check, Phone, Mail, Calendar, MapPin, Droplet, User, Building2, CalendarDays } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
-import { indiaStates, getCitiesByState } from '../data/indiaStatesCities';
-import SearchableSelect from '../components/SearchableSelect';
+
+// Redux
+import { RootState, setPatients, addPatient, updatePatient, addNotification } from '../redux/store';
+
+// Services
+import { apiService } from '../services/api';
 import { connectSocket, joinDoctorRoom, onPatientsUpdate, onPatientCreated, onPatientUpdated, disconnectSocket } from '../services/socketService';
+
+// Types
+import { Patient } from '../types';
+
+// Utils
+import { getPatientId, findPatientById } from '../utils/patientUtils';
 import { parseCSVFile } from '../utils/csvParser';
 import { validateCSVRow } from '../utils/patientValidation';
-import { debounce } from '../utils/debounce';
 
-const Patients = () => {
+// Components
+import SearchableSelect from '../components/SearchableSelect';
+import PhoneInput from '../components/PhoneInput';
+
+// Data
+import { indiaStates, getCitiesByState } from '../data/indiaStatesCities';
+
+// Constants
+import {
+  PAGINATION_OPTIONS,
+  DEFAULT_ITEMS_PER_PAGE,
+  DEFAULT_CURRENT_PAGE,
+  SORT_FIELDS,
+  SORT_ORDERS,
+  DEFAULT_SORT_FIELD,
+  DEFAULT_SORT_ORDER,
+  GENDER_OPTIONS,
+  CSV_PREVIEW_ROWS,
+  CSV_MAX_ERROR_DISPLAY,
+} from '../constants/patients';
+
+// Icons
+import {
+  Plus, Search, X, Edit, Loader2, ChevronLeft, ChevronRight, ChevronDown,
+  ArrowUp, ArrowDown, Phone, Mail, User, CalendarDays, Upload, Check,
+  Droplet, MapPin, Building2, Columns
+} from 'lucide-react';
+
+// ============================================================================
+// TYPES & INTERFACES
+// ============================================================================
+
+interface ImportResults {
+  success: number;
+  failed: number;
+  errors: Array<{ row: number; error: string }>;
+}
+
+interface ImportProgress {
+  current: number;
+  total: number;
+}
+
+// ============================================================================
+// VALIDATION SCHEMA
+// ============================================================================
+
+const patientValidationSchema = Yup.object({
+  name: Yup.string().required('Name is required'),
+  email: Yup.string().email('Invalid email').required('Email is required'),
+  mobileNumber: Yup.string().required('Phone number is required'),
+  gender: Yup.string().oneOf(['Male', 'Female', 'Other']).required('Gender is required'),
+  age: Yup.number().min(0).max(150).optional().nullable(),
+  city: Yup.string().required('City is required'),
+  state: Yup.string().required('State is required'),
+  address: Yup.string().optional().nullable(),
+});
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
+const Patients: React.FC = () => {
+  // ========================================================================
+  // REDUX & ROUTER
+  // ========================================================================
   const { patients, user } = useSelector((state: RootState) => state.data);
   const { token } = useSelector((state: RootState) => state.auth);
   const dispatch = useDispatch();
+  const location = useLocation();
+
+  // ========================================================================
+  // STATE - MODAL MANAGEMENT
+  // ========================================================================
   const [showModal, setShowModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [selectedPatientDetails, setSelectedPatientDetails] = useState<Patient | null>(null);
-  
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   
-  // Inline Editing State
+  // ========================================================================
+  // STATE - INLINE EDITING
+  // ========================================================================
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<keyof Patient | null>(null);
   const [editValue, setEditValue] = useState('');
   const [isSavingInline, setIsSavingInline] = useState(false);
   
-  // File Upload Ref
+  // ========================================================================
+  // STATE - CSV IMPORT
+  // ========================================================================
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isImporting, setIsImporting] = useState(false);
-  const [availableCities, setAvailableCities] = useState<string[]>([]);
-  
-  // CSV Preview State
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [csvPreviewData, setCsvPreviewData] = useState<any[]>([]);
-  const [csvAllData, setCsvAllData] = useState<any[]>([]); // Store all rows for import
+  const [csvAllData, setCsvAllData] = useState<any[]>([]);
   const [csvFieldMapping, setCsvFieldMapping] = useState<Record<string, string>>({});
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvValidationErrors, setCsvValidationErrors] = useState<Record<number, string[]>>({});
-  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
-  const [importResults, setImportResults] = useState<{ success: number; failed: number; errors: Array<{ row: number; error: string }> } | null>(null);
+  const [importProgress, setImportProgress] = useState<ImportProgress>({ current: 0, total: 0 });
+  const [importResults, setImportResults] = useState<ImportResults | null>(null);
+
+  // ========================================================================
+  // STATE - COLUMN SELECTION
+  // ========================================================================
+  // Column configuration: default and restricted columns
+  const columnConfig = {
+    patientId: { label: 'Patient ID', restricted: true },
+    name: { label: 'Name', restricted: true },
+    contactInfo: { 
+      label: 'Contact Info', 
+      restricted: false,
+      subFields: {
+        email: { label: 'Email' },
+        number: { label: 'Number' }
+      }
+    },
+    gender: { label: 'Gender', restricted: false },
+    age: { label: 'Age', restricted: false },
+    bloodGroup: { label: 'Blood Group', restricted: false },
+    lastVisitDate: { label: 'Last Visit', restricted: false },
+    actions: { label: 'Actions', restricted: true },
+  };
+
+  // Default visible columns: all fields selected by default
+  const defaultVisibleColumns = ['patientId', 'name', 'contactInfo', 'gender', 'age', 'bloodGroup', 'lastVisitDate', 'actions'];
   
-  // Pagination & Sort & Filter State
+  // Default visible contact sub-fields: both email and number
+  const defaultContactSubFields = ['email', 'number'];
+  
+  // Restricted columns that cannot be hidden
+  const restrictedColumns = ['patientId', 'name', 'actions'];
+
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(
+    new Set(defaultVisibleColumns)
+  );
+  
+  // State for contact info sub-fields (email and number)
+  const [visibleContactSubFields, setVisibleContactSubFields] = useState<Set<string>>(
+    new Set(defaultContactSubFields)
+  );
+  
+  const [showColumnSelector, setShowColumnSelector] = useState(false);
+  const columnSelectorRef = useRef<HTMLDivElement>(null);
+
+  // ========================================================================
+  // STATE - FILTERING & PAGINATION
+  // ========================================================================
   const [searchTerm, setSearchTerm] = useState('');
-  const [itemsPerPage, setItemsPerPage] = useState<number>(10);
-  const [currentPage, setCurrentPage] = useState<number>(1);
-  const [sortField, setSortField] = useState<keyof Patient>('lastVisitDate'); // Default sort
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [itemsPerPage, setItemsPerPage] = useState<number>(DEFAULT_ITEMS_PER_PAGE);
+  const [currentPage, setCurrentPage] = useState<number>(DEFAULT_CURRENT_PAGE);
+  const [sortField, setSortField] = useState<keyof Patient>(DEFAULT_SORT_FIELD);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(DEFAULT_SORT_ORDER);
 
-  const location = useLocation();
+  // ========================================================================
+  // STATE - FORM
+  // ========================================================================
+  const [availableCities, setAvailableCities] = useState<string[]>([]);
 
+  // ========================================================================
+  // REFS
+  // ========================================================================
   const hasLoadedRef = useRef(false);
+  
+  // ========================================================================
+  // HANDLERS - COLUMN SELECTION
+  // ========================================================================
+  
+  /**
+   * Toggle column visibility
+   */
+  const toggleColumn = useCallback((columnKey: string) => {
+    // Prevent hiding restricted columns
+    if (restrictedColumns.includes(columnKey)) {
+      return;
+    }
+    
+    setVisibleColumns(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(columnKey)) {
+        newSet.delete(columnKey);
+        // If hiding contactInfo, also clear sub-fields visibility
+        if (columnKey === 'contactInfo') {
+          setVisibleContactSubFields(new Set());
+        }
+      } else {
+        newSet.add(columnKey);
+        // If showing contactInfo, restore default sub-fields
+        if (columnKey === 'contactInfo') {
+          setVisibleContactSubFields(new Set(defaultContactSubFields));
+        }
+      }
+      return newSet;
+    });
+  }, []);
 
-  // Load patients function
-    const loadPatients = async () => {
-            try {
+  /**
+   * Toggle contact info sub-field visibility
+   */
+  const toggleContactSubField = useCallback((subField: string) => {
+    setVisibleContactSubFields(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(subField)) {
+        newSet.delete(subField);
+        // If no sub-fields are visible, hide the contactInfo column
+        if (newSet.size === 0) {
+          setVisibleColumns(prevCols => {
+            const newCols = new Set(prevCols);
+            newCols.delete('contactInfo');
+            return newCols;
+          });
+        }
+      } else {
+        newSet.add(subField);
+        // Ensure contactInfo column is visible when showing sub-fields
+        setVisibleColumns(prevCols => {
+          const newCols = new Set(prevCols);
+          newCols.add('contactInfo');
+          return newCols;
+        });
+      }
+      return newSet;
+    });
+  }, []);
+
+  /**
+   * Reset to default columns
+   */
+  const resetToDefaultColumns = useCallback(() => {
+    setVisibleColumns(new Set(defaultVisibleColumns));
+    setVisibleContactSubFields(new Set(defaultContactSubFields));
+  }, []);
+
+  // ========================================================================
+  // DATA LOADING
+  // ========================================================================
+
+  /**
+   * Load patients from API
+   */
+  const loadPatients = useCallback(async () => {
+    try {
       if (hasLoadedRef.current && patients.length > 0) {
         return; // Prevent duplicate calls in StrictMode
       }
@@ -68,13 +278,32 @@ const Patients = () => {
                 hasLoadedRef.current = true;
                 const data = await apiService.patients.getAll();
                 dispatch(setPatients(data));
-            } catch (e) {
-                console.error("Failed to fetch patients", e);
+    } catch (error) {
+      console.error("Failed to fetch patients", error);
                 hasLoadedRef.current = false; // Reset on error to allow retry
-        }
-    };
+            }
+  }, [patients.length, dispatch]);
 
-  // Initial load and Socket.IO setup
+  // ========================================================================
+  // EFFECTS
+  // ========================================================================
+
+  /**
+   * Handle click outside column selector
+   */
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (columnSelectorRef.current && !columnSelectorRef.current.contains(event.target as Node)) {
+        setShowColumnSelector(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  /**
+   * Initial load and Socket.IO setup
+   */
   useEffect(() => {
     loadPatients();
     
@@ -119,9 +348,11 @@ const Patients = () => {
         disconnectSocket();
       };
     }
-  }, [location, dispatch, token, user]);
+  }, [location, dispatch, token, user, loadPatients]);
 
-  // Effect to handle opening details once patients are loaded
+  /**
+   * Handle opening details when patient is selected from navigation
+   */
   useEffect(() => {
     if (location.state && (location.state as any).selectedPatientId && patients.length > 0) {
         const pId = (location.state as any).selectedPatientId;
@@ -133,143 +364,13 @@ const Patients = () => {
     }
   }, [patients, location.state]);
 
-  const handleSort = useCallback((field: keyof Patient) => {
-    if (sortField === field) {
-      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortOrder('asc');
-    }
-  }, [sortField]);
+  // ========================================================================
+  // HANDLERS - MODAL MANAGEMENT
+  // ========================================================================
 
-  const renderSortIndicator = (field: keyof Patient) => {
-    if (sortField !== field) return <span className="w-4 h-4 ml-1 inline-block" />; // Spacer to maintain layout
-    return sortOrder === 'asc' 
-      ? <ArrowUp className="w-4 h-4 ml-1 inline-block text-blue-600 animate-in fade-in" /> 
-      : <ArrowDown className="w-4 h-4 ml-1 inline-block text-blue-600 animate-in fade-in" />;
-  };
-
-  // Inline Editing Handlers - Memoized for performance
-  const startInlineEdit = useCallback((p: Patient, field: keyof Patient) => {
-    setEditingId(getPatientId(p));
-    setEditingField(field);
-    setEditValue(String(p[field] || ''));
-  }, []);
-
-  const cancelInlineEdit = useCallback(() => {
-    setEditingId(null);
-    setEditingField(null);
-    setEditValue('');
-  }, []);
-
-  const saveInlineEdit = useCallback(async (p: Patient) => {
-    if (!editingField) return;
-    setIsSavingInline(true);
-    try {
-        const updatedPatient = { ...p, [editingField]: editValue };
-        await apiService.patients.update(updatedPatient);
-        cancelInlineEdit();
-    } catch (error) {
-        console.error("Failed to update patient", error);
-        alert("Failed to update patient info.");
-    } finally {
-        setIsSavingInline(false);
-    }
-  }, [editingField, editValue, cancelInlineEdit]);
-
-  const filteredAndSortedPatients = useMemo(() => {
-    // Ensure we have a fresh array reference for React to detect changes
-    const patientsArray = Array.isArray(patients) ? [...patients] : [];
-    
-    let result = patientsArray.filter(p => 
-       p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-       p.email?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
-    // Create a copy before sorting to ensure we don't mutate frozen objects from Redux
-    return [...result].sort((a, b) => {
-      let valA: string | number = '';
-      let valB: string | number = '';
-      
-      // Handle patientId field
-      if (sortField === 'patientId') {
-        valA = getPatientId(a);
-        valB = getPatientId(b);
-      } else {
-        const fieldValueA = a[sortField];
-        const fieldValueB = b[sortField];
-        // Convert to string for comparison, handling arrays and objects
-        valA = Array.isArray(fieldValueA) ? fieldValueA.join(',') : (fieldValueA?.toString() || '');
-        valB = Array.isArray(fieldValueB) ? fieldValueB.join(',') : (fieldValueB?.toString() || '');
-      }
-      
-      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
-      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
-      return 0;
-    });
-  }, [patients, searchTerm, sortField, sortOrder]);
-
-  // Pagination Logic - Memoized for performance
-  const { totalPages, paginatedPatients } = useMemo(() => {
-    const total = Math.ceil(filteredAndSortedPatients.length / itemsPerPage);
-    const paginated = filteredAndSortedPatients.slice(
-      (currentPage - 1) * itemsPerPage,
-      currentPage * itemsPerPage
-    );
-    return { totalPages: total, paginatedPatients: paginated };
-  }, [filteredAndSortedPatients, itemsPerPage, currentPage]);
-
-  // CSV Import Handler - Optimized with utility functions
-  const handleImportClick = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
-  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-
-    reader.onload = (e) => {
-        try {
-            const text = e.target?.result as string;
-            const { headers, rows: allRows, fieldMapping } = parseCSVFile(text);
-            
-            setCsvHeaders(headers);
-            setCsvFieldMapping(fieldMapping);
-            
-            // Store first 10 for preview
-            const previewRows = allRows.slice(0, 10);
-            setCsvAllData(allRows);
-            setCsvPreviewData(previewRows);
-            
-            // Validate all rows
-            const validationErrors: Record<number, string[]> = {};
-            allRows.forEach((row, index) => {
-                const errors = validateCSVRow(row, fieldMapping, index + 2);
-                if (errors.length > 0) {
-                    validationErrors[index + 2] = errors;
-                }
-            });
-            
-            setCsvValidationErrors(validationErrors);
-            setShowPreviewModal(true);
-        } catch (error) {
-            console.error("CSV Parse Error", error);
-            alert(error instanceof Error ? error.message : "Failed to parse CSV file. Please ensure it is formatted correctly.");
-        } finally {
-            if (fileInputRef.current) fileInputRef.current.value = ''; 
-        }
-    };
-
-    reader.onerror = () => {
-        alert("Failed to read file.");
-    };
-
-    reader.readAsText(file);
-  }, []);
-
-  // Memoized handlers
+  /**
+   * Open create/edit modal
+   */
   const handleOpenModal = useCallback((patient?: Patient) => {
     if (patient) {
       setEditingPatient(patient);
@@ -283,133 +384,343 @@ const Patients = () => {
     setShowModal(true);
   }, []);
 
+  /**
+   * Open patient details modal
+   */
   const handleOpenDetails = useCallback((patient: Patient) => {
-    setSelectedPatientDetails(patient);
-    setShowDetailsModal(true);
+      setSelectedPatientDetails(patient);
+      setShowDetailsModal(true);
   }, []);
 
+  // ========================================================================
+  // HANDLERS - SORTING
+  // ========================================================================
+
+  /**
+   * Handle column sorting
+   */
+  const handleSort = useCallback((field: keyof Patient) => {
+    if (sortField === field) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortOrder(SORT_ORDERS.ASC);
+    }
+  }, [sortField]);
+
+  /**
+   * Render sort indicator icon
+   */
+  const renderSortIndicator = useCallback((field: keyof Patient) => {
+    if (sortField !== field) {
+      return <span className="w-4 h-4 ml-1 inline-block" />;
+    }
+    return sortOrder === SORT_ORDERS.ASC
+      ? <ArrowUp className="w-4 h-4 ml-1 inline-block text-blue-600 animate-in fade-in" /> 
+      : <ArrowDown className="w-4 h-4 ml-1 inline-block text-blue-600 animate-in fade-in" />;
+  }, [sortField, sortOrder]);
+
+  // ========================================================================
+  // HANDLERS - INLINE EDITING
+  // ========================================================================
+
+  /**
+   * Start inline editing for a field
+   */
+  const startInlineEdit = useCallback((patient: Patient, field: keyof Patient) => {
+    setEditingId(getPatientId(patient));
+    setEditingField(field);
+    setEditValue(String(patient[field] || ''));
+  }, []);
+
+  /**
+   * Cancel inline editing
+   */
+  const cancelInlineEdit = useCallback(() => {
+    setEditingId(null);
+    setEditingField(null);
+    setEditValue('');
+  }, []);
+
+  /**
+   * Save inline edit
+   */
+  const saveInlineEdit = useCallback(async (patient: Patient) => {
+    if (!editingField) return;
+    
+    setIsSavingInline(true);
+    try {
+      const updatedPatient = { ...patient, [editingField]: editValue };
+      await apiService.patients.update(updatedPatient);
+        cancelInlineEdit();
+    } catch (error) {
+        console.error("Failed to update patient", error);
+        dispatch(addNotification({
+          id: `error-${Date.now()}`,
+          title: 'Error',
+          message: 'Failed to update patient info.',
+          type: 'error',
+          timestamp: new Date().toISOString()
+        }));
+    } finally {
+        setIsSavingInline(false);
+    }
+  }, [editingField, editValue, cancelInlineEdit]);
+
+  // ========================================================================
+  // HANDLERS - CSV IMPORT
+  // ========================================================================
+
+  /**
+   * Trigger file input click
+   */
+  const handleImportClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  /**
+   * Handle CSV file upload and parsing
+   */
+  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+        try {
+            const text = e.target?.result as string;
+        const { headers, rows: allRows, fieldMapping } = parseCSVFile(text);
+        
+        setCsvHeaders(headers);
+        setCsvFieldMapping(fieldMapping);
+        
+        // Store first N rows for preview
+        const previewRows = allRows.slice(0, CSV_PREVIEW_ROWS);
+        setCsvAllData(allRows);
+        setCsvPreviewData(previewRows);
+        
+        // Validate all rows
+        const validationErrors: Record<number, string[]> = {};
+        allRows.forEach((row, index) => {
+          const errors = validateCSVRow(row, fieldMapping, index + 2);
+          if (errors.length > 0) {
+            validationErrors[index + 2] = errors;
+          }
+        });
+        
+        setCsvValidationErrors(validationErrors);
+        setShowPreviewModal(true);
+      } catch (error) {
+        console.error("CSV Parse Error", error);
+        dispatch(addNotification({
+          id: `error-${Date.now()}`,
+          title: 'Error',
+          message: error instanceof Error ? error.message : "Failed to parse CSV file. Please ensure it is formatted correctly.",
+          type: 'error',
+          timestamp: new Date().toISOString()
+        }));
+      } finally {
+        if (fileInputRef.current) {
+          fileInputRef.current.value = '';
+        }
+      }
+    };
+
+    reader.onerror = () => {
+      dispatch(addNotification({
+        id: `error-${Date.now()}`,
+        title: 'Error',
+        message: 'Failed to read file.',
+        type: 'error',
+        timestamp: new Date().toISOString()
+      }));
+    };
+
+    reader.readAsText(file);
+  }, []);
+
+  /**
+   * Handle CSV import confirmation
+   */
   const handleConfirmImport = async () => {
     setIsImporting(true);
     setImportProgress({ current: 0, total: csvAllData.length });
     setImportResults(null);
 
     try {
-        // Prepare all patients data
-        const patientsToImport: any[] = [];
-        const validationErrors: Record<number, string[]> = {};
+      // Prepare all patients data
+      const patientsToImport: any[] = [];
+      const validationErrors: Record<number, string[]> = {};
 
-        for (let i = 0; i < csvAllData.length; i++) {
-            const rowData = csvAllData[i];
-            setImportProgress({ current: i + 1, total: csvAllData.length });
+      for (let i = 0; i < csvAllData.length; i++) {
+        const rowData = csvAllData[i];
+        setImportProgress({ current: i + 1, total: csvAllData.length });
 
-            const newPatient: any = {
-                lastVisitDate: new Date().toISOString().split('T')[0],
-                appointmentDate: '-',
-                visits: [],
-                gender: 'Male' // Default
-            };
+                const newPatient: any = {
+                    lastVisitDate: new Date().toISOString().split('T')[0],
+                    appointmentDate: '-',
+          visits: [],
+          gender: 'Male', // Default
+                };
 
-            // Map fields based on field mapping
-            Object.keys(csvFieldMapping).forEach(csvHeader => {
-                const fieldName = csvFieldMapping[csvHeader];
-                const value = rowData[csvHeader];
-                if (value && fieldName) {
-                    // Clean and format values
-                    let cleanedValue = String(value).trim();
-                    
-                    // Format gender
-                    if (fieldName === 'gender' && cleanedValue) {
-                        cleanedValue = cleanedValue.charAt(0).toUpperCase() + cleanedValue.slice(1).toLowerCase();
-                        if (!['Male', 'Female', 'Other'].includes(cleanedValue)) {
-                            cleanedValue = 'Male'; // Default
-                        }
-                    }
-                    
-                    // Format blood group
-                    if (fieldName === 'bloodGroup' && cleanedValue) {
-                        cleanedValue = cleanedValue.toUpperCase().replace(/\s+/g, '');
-                    }
-                    
-                    newPatient[fieldName] = cleanedValue;
-                }
-            });
-
-            // Validate patient data using utility function
-            const validationResult = validateCSVRow(rowData, csvFieldMapping, i + 2);
-            if (validationResult.length > 0) {
-                validationErrors[i + 2] = validationResult;
-            } else {
-                patientsToImport.push(newPatient);
+        // Map fields based on field mapping
+        Object.keys(csvFieldMapping).forEach(csvHeader => {
+          const fieldName = csvFieldMapping[csvHeader];
+          const value = rowData[csvHeader];
+          if (value && fieldName) {
+            let cleanedValue = String(value).trim();
+            
+            // Format gender
+            if (fieldName === 'gender' && cleanedValue) {
+              cleanedValue = cleanedValue.charAt(0).toUpperCase() + cleanedValue.slice(1).toLowerCase();
+              if (!['Male', 'Female', 'Other'].includes(cleanedValue)) {
+                cleanedValue = 'Male';
+              }
             }
+            
+            // Format blood group
+            if (fieldName === 'bloodGroup' && cleanedValue) {
+              cleanedValue = cleanedValue.toUpperCase().replace(/\s+/g, '');
+            }
+            
+            newPatient[fieldName] = cleanedValue;
+          }
+                });
+
+        // Validate patient data
+        const validationResult = validateCSVRow(rowData, csvFieldMapping, i + 2);
+        if (validationResult.length > 0) {
+          validationErrors[i + 2] = validationResult;
+        } else {
+          patientsToImport.push(newPatient);
         }
+      }
 
-        // If there are validation errors, show them but still try to import valid ones
-        if (Object.keys(validationErrors).length > 0 && patientsToImport.length === 0) {
-            const errors: Array<{ row: number; error: string }> = [];
-            Object.keys(validationErrors).forEach(rowNum => {
-                errors.push({ row: parseInt(rowNum), error: validationErrors[parseInt(rowNum)].join(', ') });
-            });
-            setImportResults({
-                success: 0,
-                failed: csvAllData.length,
-                errors: errors.slice(0, 50)
-            });
-            setIsImporting(false);
-            return;
-        }
-
-        // Call bulk import API
-        const result = await apiService.patients.bulkImport(patientsToImport);
-
-        // Add successful patients to Redux
-        result.successful.forEach(patient => {
-            dispatch(addPatient(patient));
-        });
-
-        // Format errors for display
+      // If there are validation errors and no valid patients, show errors
+      if (Object.keys(validationErrors).length > 0 && patientsToImport.length === 0) {
         const errors: Array<{ row: number; error: string }> = [];
-        
-        // Add validation errors
         Object.keys(validationErrors).forEach(rowNum => {
-            errors.push({ row: parseInt(rowNum), error: validationErrors[parseInt(rowNum)].join(', ') });
+          errors.push({ row: parseInt(rowNum), error: validationErrors[parseInt(rowNum)].join(', ') });
         });
-        
-        // Add API errors
-        result.failed.forEach(failed => {
-            errors.push({ row: failed.row, error: failed.error });
-        });
-
         setImportResults({
-            success: result.summary.successful,
-            failed: result.summary.failed + Object.keys(validationErrors).length,
-            errors: errors.slice(0, 50) // Limit to first 50 errors
+          success: 0,
+          failed: csvAllData.length,
+          errors: errors.slice(0, CSV_MAX_ERROR_DISPLAY),
         });
-        
-        // Reset pagination to show new patients
-        setCurrentPage(1);
-        
-        // Close preview modal
-        setShowPreviewModal(false);
-        setCsvPreviewData([]);
-        setCsvAllData([]);
-        setCsvFieldMapping({});
-        setCsvHeaders([]);
-        setCsvValidationErrors({});
-    } catch (error: any) {
-        console.error("CSV Import Error", error);
-        const errorMessage = error?.response?.data?.error || error?.message || 'Failed to import patients. Please try again.';
-        setImportResults({
-            success: 0,
-            failed: csvAllData.length,
-            errors: [{ row: 0, error: errorMessage }]
-        });
-    } finally {
         setIsImporting(false);
-        setImportProgress({ current: 0, total: 0 });
+        return;
+      }
+
+      // Call bulk import API
+      const result = await apiService.patients.bulkImport(patientsToImport);
+
+      // Add successful patients to Redux
+      result.successful.forEach(patient => {
+        dispatch(addPatient(patient));
+      });
+
+      // Format errors for display
+      const errors: Array<{ row: number; error: string }> = [];
+      
+      // Add validation errors
+      Object.keys(validationErrors).forEach(rowNum => {
+        errors.push({ row: parseInt(rowNum), error: validationErrors[parseInt(rowNum)].join(', ') });
+      });
+      
+      // Add API errors
+      result.failed.forEach(failed => {
+        errors.push({ row: failed.row, error: failed.error });
+      });
+
+      setImportResults({
+        success: result.summary.successful,
+        failed: result.summary.failed + Object.keys(validationErrors).length,
+        errors: errors.slice(0, CSV_MAX_ERROR_DISPLAY),
+      });
+      
+      // Reset pagination to show new patients
+      setCurrentPage(DEFAULT_CURRENT_PAGE);
+      
+      // Close preview modal and reset CSV state
+      setShowPreviewModal(false);
+      setCsvPreviewData([]);
+      setCsvAllData([]);
+      setCsvFieldMapping({});
+      setCsvHeaders([]);
+      setCsvValidationErrors({});
+    } catch (error: any) {
+            console.error("CSV Import Error", error);
+      const errorMessage = error?.response?.data?.error || error?.message || 'Failed to import patients. Please try again.';
+      setImportResults({
+        success: 0,
+        failed: csvAllData.length,
+        errors: [{ row: 0, error: errorMessage }],
+      });
+        } finally {
+            setIsImporting(false);
+      setImportProgress({ current: 0, total: 0 });
     }
   };
 
-  // Formik Configuration
+  // ========================================================================
+  // COMPUTED VALUES - FILTERING & SORTING
+  // ========================================================================
+
+  /**
+   * Filter and sort patients based on search term and sort settings
+   */
+  const filteredAndSortedPatients = useMemo(() => {
+    const patientsArray = Array.isArray(patients) ? [...patients] : [];
+    
+    // Filter by search term
+    const filtered = patientsArray.filter(patient => 
+      patient.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      patient.email?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    // Sort filtered results
+    return [...filtered].sort((a, b) => {
+      let valA: string | number = '';
+      let valB: string | number = '';
+      
+      // Handle patientId field
+      if (sortField === 'patientId') {
+        valA = getPatientId(a);
+        valB = getPatientId(b);
+      } else {
+        const fieldValueA = a[sortField];
+        const fieldValueB = b[sortField];
+        valA = Array.isArray(fieldValueA) 
+          ? fieldValueA.join(',') 
+          : (fieldValueA?.toString() || '');
+        valB = Array.isArray(fieldValueB) 
+          ? fieldValueB.join(',') 
+          : (fieldValueB?.toString() || '');
+      }
+      
+      if (valA < valB) return sortOrder === SORT_ORDERS.ASC ? -1 : 1;
+      if (valA > valB) return sortOrder === SORT_ORDERS.ASC ? 1 : -1;
+      return 0;
+    });
+  }, [patients, searchTerm, sortField, sortOrder]);
+
+  /**
+   * Pagination calculations
+   */
+  const { totalPages, paginatedPatients } = useMemo(() => {
+    const total = Math.ceil(filteredAndSortedPatients.length / itemsPerPage);
+    const paginated = filteredAndSortedPatients.slice(
+      (currentPage - 1) * itemsPerPage,
+      currentPage * itemsPerPage
+    );
+    return { totalPages: total, paginatedPatients: paginated };
+  }, [filteredAndSortedPatients, itemsPerPage, currentPage]);
+
+  // ========================================================================
+  // FORMIK CONFIGURATION
+  // ========================================================================
+
   const formik = useFormik({
     enableReinitialize: true,
     initialValues: {
@@ -423,26 +734,20 @@ const Patients = () => {
       state: editingPatient?.state || '',
       address: editingPatient?.address || '',
     },
-    validationSchema: Yup.object({
-      name: Yup.string().required('Name is required'),
-      email: Yup.string().email('Invalid email').required('Email is required'),
-      mobileNumber: Yup.string().required('Phone number is required'),
-      gender: Yup.string().oneOf(['Male', 'Female', 'Other']).required('Gender is required'),
-      city: Yup.string().required('City is required'),
-      state: Yup.string().required('State is required'),
-      address: Yup.string().optional().nullable(),
-    }),
+    validationSchema: patientValidationSchema,
     onSubmit: async (values, { resetForm }) => {
       try {
         // Prepare patient data - convert empty bloodGroup to undefined
         const patientData = {
           ...values,
-          bloodGroup: (values.bloodGroup && values.bloodGroup.trim() !== '') ? values.bloodGroup as 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-' : undefined,
+          bloodGroup: (values.bloodGroup && values.bloodGroup.trim() !== '') 
+            ? values.bloodGroup as 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-' 
+            : undefined,
         };
 
         if (editingPatient) {
+          // Update existing patient
           const updated = await apiService.patients.update({ ...editingPatient, ...patientData });
-          // Ensure patientId is set for Redux update
           const normalizedUpdated = {
             ...updated,
             patientId: updated.patientId || updated.id?.toString() || editingPatient.patientId || editingPatient.id?.toString()
@@ -450,14 +755,15 @@ const Patients = () => {
           dispatch(updatePatient(normalizedUpdated));
           setEditingPatient(null);
         } else {
+          // Create new patient
           const created = await apiService.patients.create({
-             ...patientData,
+            ...patientData,
              lastVisitDate: new Date().toISOString().split('T')[0],
              appointmentDate: '-',
              visits: []
           } as any);
           
-          // Normalize patient data - ensure patientId is set and all required fields
+          // Normalize patient data
           const patientIdStr = created.patientId?.toString() || created.id?.toString() || `P-${Date.now()}`;
           const normalizedCreated: Patient = {
             ...created,
@@ -468,6 +774,7 @@ const Patients = () => {
             email: created.email || patientData.email,
             mobileNumber: created.mobileNumber || patientData.mobileNumber,
             gender: created.gender || patientData.gender,
+            age: created.age || patientData.age,
             city: created.city || patientData.city,
             state: created.state || patientData.state,
             address: created.address || patientData.address,
@@ -476,33 +783,80 @@ const Patients = () => {
             appointmentDate: created.appointmentDate || '-'
           };
           
-          // Add to Redux store - this will automatically reflect on screen
-          console.log('Adding patient to Redux:', normalizedCreated);
           dispatch(addPatient(normalizedCreated));
-          
-          // Reset pagination to show the new patient (likely on first page)
-          setCurrentPage(1);
-          
-          // Reset form after successful creation
+          setCurrentPage(DEFAULT_CURRENT_PAGE);
           resetForm();
         }
+        
         setShowModal(false);
         setAvailableCities([]);
-      } catch (e) {
-        console.error("Form submission error", e);
-        alert("Failed to save patient.");
+      } catch (error) {
+        console.error("Form submission error", error);
+        dispatch(addNotification({
+          id: `error-${Date.now()}`,
+          title: 'Error',
+          message: 'Failed to save patient.',
+          type: 'error',
+          timestamp: new Date().toISOString()
+        }));
       }
     }
   });
 
+  // ========================================================================
+  // RENDER HELPERS
+  // ========================================================================
+
+  /**
+   * Format date for display
+   */
+  const formatDate = useCallback((dateString: string | null | undefined): string => {
+    if (!dateString || dateString === '-') return 'No visits';
+    
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    } catch {
+      return 'Invalid date';
+    }
+  }, []);
+
+  /**
+   * Format date with time for display
+   */
+  const formatDateTime = useCallback((dateString: string | null | undefined): string => {
+    if (!dateString) return 'No visits';
+    
+    try {
+      return new Date(dateString).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+    } catch {
+      return 'Invalid date';
+    }
+  }, []);
+
+  // ========================================================================
+  // RENDER
+  // ========================================================================
+
   return (
-    <div className="p-6">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+    <div className="p-3 sm:p-4 md:p-6">
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 sm:mb-8 gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Patients</h1>
-          <p className="text-gray-500">Manage patient records and history.</p>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">My Patients</h1>
+          <p className="text-sm sm:text-base text-gray-500">Manage patient records and history.</p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full md:w-auto">
              <input 
                 type="file" 
                 accept=".csv" 
@@ -513,24 +867,25 @@ const Patients = () => {
              <button 
                 onClick={handleImportClick}
                 disabled={isImporting}
-                className="bg-white border border-gray-200 text-gray-700 px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-gray-50 transition font-medium"
+            className="bg-white border border-gray-200 text-gray-700 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl flex items-center justify-center gap-2 hover:bg-gray-50 transition font-medium disabled:opacity-50 text-sm sm:text-base"
              >
                 {isImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                Import CSV
+                <span className="hidden xs:inline">Import CSV</span>
+                <span className="xs:hidden">Import</span>
              </button>
              <button 
                 onClick={() => handleOpenModal()}
-                className="bg-blue-600 text-white px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-blue-700 transition shadow-md shadow-blue-500/20 font-medium"
+                className="bg-blue-600 text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl flex items-center justify-center gap-2 hover:bg-blue-700 transition shadow-md shadow-blue-500/20 font-medium text-sm sm:text-base"
              >
-               <Plus className="w-4 h-4" /> Add Patient
+               <Plus className="w-4 h-4" /> <span className="hidden xs:inline">Add Patient</span><span className="xs:hidden">Add</span>
              </button>
         </div>
       </div>
 
       {/* Controls Bar */}
-      <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 mb-6 flex flex-col md:flex-row gap-4 justify-between items-center">
-         {/* Search */}
-         <div className="relative w-full md:w-64">
+      <div className="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl shadow-sm border border-gray-100 mb-4 sm:mb-6 flex flex-col md:flex-row gap-3 sm:gap-4 justify-between items-center">
+        {/* Search */}
+        <div className="relative w-full md:w-64">
           <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
           <input 
             type="text" 
@@ -541,274 +896,421 @@ const Patients = () => {
           />
         </div>
 
+        {/* Sort Controls & Column Selector */}
         <div className="flex flex-wrap gap-3 w-full md:w-auto">
-          {/* Sort Field */}
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-500">Sort:</span>
             <select 
-                value={sortField}
-                onChange={(e) => handleSort(e.target.value as keyof Patient)}
-                className="px-4 py-2 bg-white text-gray-700 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 cursor-pointer outline-none"
+              value={sortField}
+              onChange={(e) => handleSort(e.target.value as keyof Patient)}
+              className="px-4 py-2 bg-white text-gray-700 border border-gray-200 rounded-xl focus:outline-none focus:border-blue-500 cursor-pointer outline-none"
             >
-                <option value="name">Name</option>
-                <option value="email">Email</option>
-                <option value="lastVisitDate">Last Visit</option>
-                <option value="patientId">Patient ID</option>
+              <option value={SORT_FIELDS.NAME}>Name</option>
+              <option value={SORT_FIELDS.EMAIL}>Email</option>
+              <option value={SORT_FIELDS.LAST_VISIT_DATE}>Last Visit</option>
+              <option value={SORT_FIELDS.PATIENT_ID}>Patient ID</option>
             </select>
             <button 
-                onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
-                className="p-2 border border-gray-200 rounded-xl hover:bg-gray-50 text-gray-600 transition-colors"
-                title={`Sort ${sortOrder === 'asc' ? 'Descending' : 'Ascending'}`}
+              onClick={() => setSortOrder(prev => prev === SORT_ORDERS.ASC ? SORT_ORDERS.DESC : SORT_ORDERS.ASC)}
+              className="p-2 border border-gray-200 rounded-xl hover:bg-gray-50 text-gray-600 transition-colors"
+              title={`Sort ${sortOrder === SORT_ORDERS.ASC ? 'Descending' : 'Ascending'}`}
             >
-                {sortOrder === 'asc' ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />}
+              {sortOrder === SORT_ORDERS.ASC ? <ArrowUp className="w-4 h-4" /> : <ArrowDown className="w-4 h-4" />}
             </button>
+          </div>
+          
+          {/* Column Selector */}
+          <div className="relative" ref={columnSelectorRef}>
+            <button
+              onClick={() => setShowColumnSelector(!showColumnSelector)}
+              className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+              title="Select Columns"
+            >
+              <Columns className="w-4 h-4" />
+              <span className="text-sm">Columns</span>
+              <ChevronDown className={`w-4 h-4 transition-transform ${showColumnSelector ? 'rotate-180' : ''}`} />
+            </button>
+            
+            {showColumnSelector && (
+              <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl shadow-lg border border-gray-200 z-50 overflow-hidden">
+                <div className="p-3 border-b border-gray-100 bg-gray-50">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-gray-700">Select Columns</h3>
+                    <button
+                      onClick={resetToDefaultColumns}
+                      className="text-xs text-blue-600 hover:text-blue-700 font-medium"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+                <div className="p-2 max-h-64 overflow-y-auto">
+                  {Object.entries(columnConfig).map(([key, config]) => {
+                    const isVisible = visibleColumns.has(key);
+                    const isRestricted = config.restricted;
+                    const hasSubFields = config.subFields !== undefined;
+                    
+                    return (
+                      <div key={key}>
+                        <label
+                          className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
+                            isRestricted 
+                              ? 'bg-gray-50 cursor-not-allowed opacity-75' 
+                              : 'hover:bg-gray-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isVisible}
+                            onChange={() => toggleColumn(key)}
+                            disabled={isRestricted}
+                            className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 disabled:opacity-50"
+                          />
+                          <span className={`text-sm ${isRestricted ? 'text-gray-500' : 'text-gray-700'}`}>
+                            {config.label}
+                          </span>
+                          {isRestricted && (
+                            <span className="ml-auto text-xs text-gray-400">Required</span>
+                          )}
+                        </label>
+                        
+                        {/* Sub-fields for contactInfo */}
+                        {hasSubFields && isVisible && config.subFields && (
+                          <div className="ml-6 mb-1 space-y-1">
+                            {Object.entries(config.subFields).map(([subKey, subConfig]) => {
+                              const isSubFieldVisible = visibleContactSubFields.has(subKey);
+                              return (
+                                <label
+                                  key={subKey}
+                                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-gray-50"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isSubFieldVisible}
+                                    onChange={() => toggleContactSubField(subKey)}
+                                    className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                  />
+                                  <span className="text-xs text-gray-600">
+                                    {subConfig.label}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Patient List */}
-      <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
+      {/* Patient List Table */}
+      <div className="bg-white rounded-xl sm:rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
+        <div className="overflow-x-auto overflow-y-auto -mx-3 sm:mx-0 px-3 sm:px-0" style={{ maxHeight: 'calc(100vh - 300px)' }}>
           <table className="w-full text-left">
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr className="bg-gradient-to-r from-gray-50 to-gray-100 border-b-2 border-gray-200">
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" onClick={() => handleSort('patientId')}>
-                   <div className="flex items-center gap-2">
-                     <span>Patient ID</span>
-                     {sortField === 'patientId' && (sortOrder === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
-                   </div>
-                </th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" onClick={() => handleSort('name')}>
-                   <div className="flex items-center gap-2">
-                     <span>Name</span>
-                     {sortField === 'name' && (sortOrder === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
-                   </div>
-                </th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" onClick={() => handleSort('email')}>
+                {visibleColumns.has('patientId') && (
+                  <th 
+                    className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" 
+                    onClick={() => handleSort('patientId')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Patient ID</span>
+                      {renderSortIndicator('patientId')}
+                    </div>
+                  </th>
+                )}
+                {visibleColumns.has('name') && (
+                  <th 
+                    className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" 
+                    onClick={() => handleSort('name')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Name</span>
+                      {renderSortIndicator('name')}
+                    </div>
+                  </th>
+                )}
+                {visibleColumns.has('contactInfo') && visibleContactSubFields.size > 0 && (
+                  <th 
+                    className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" 
+                    onClick={() => handleSort('email')}
+                  >
                     <div className="flex items-center gap-2">
                       <span>Contact Info</span>
-                      {sortField === 'email' && (sortOrder === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                      {renderSortIndicator('email')}
                     </div>
-                </th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  </th>
+                )}
+                {visibleColumns.has('gender') && (
+                  <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider">
                     <div className="flex items-center gap-2">Gender</div>
-                </th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  </th>
+                )}
+                {visibleColumns.has('age') && (
+                  <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider">
                     <div className="flex items-center gap-2">Age</div>
-                </th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  </th>
+                )}
+                {visibleColumns.has('bloodGroup') && (
+                  <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider">
                     <div className="flex items-center gap-2">Blood Group</div>
-                </th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" onClick={() => handleSort('lastVisitDate')}>
+                  </th>
+                )}
+                {visibleColumns.has('lastVisitDate') && (
+                  <th 
+                    className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" 
+                    onClick={() => handleSort('lastVisitDate')}
+                  >
                     <div className="flex items-center gap-2">
                       <span>Last Visit</span>
-                      {sortField === 'lastVisitDate' && (sortOrder === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                      {renderSortIndicator('lastVisitDate')}
                     </div>
-                </th>
-                {/* <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider cursor-pointer hover:bg-gray-200 transition-colors" onClick={() => handleSort('appointmentDate')}>
-                    <div className="flex items-center gap-2">Next Appointment {renderSortIndicator('appointmentDate')}</div>
-                </th> */}
-                <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider text-right">Actions</th>
+                  </th>
+                )}
+                {visibleColumns.has('actions') && (
+                  <th className="px-6 py-4 text-xs font-bold text-gray-700 uppercase tracking-wider text-right">Actions</th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {paginatedPatients.length > 0 ? paginatedPatients.map((patient, index) => (
                 <tr key={getPatientId(patient)} className="hover:bg-blue-50/50 transition-all duration-150 border-b border-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center mr-3">
-                        <span className="text-xs font-bold text-blue-700">#{index + 1 + (currentPage - 1) * itemsPerPage}</span>
+                  {/* Patient ID */}
+                  {visibleColumns.has('patientId') && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center mr-3">
+                          <span className="text-xs font-bold text-blue-700">
+                            #{index + 1 + (currentPage - 1) * itemsPerPage}
+                          </span>
+                        </div>
+                        <div className="text-sm font-semibold text-gray-900">
+                          {getPatientId(patient)}
+                        </div>
                       </div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {getPatientId(patient)}
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div 
-                        onClick={() => handleOpenDetails(patient)}
+                    </td>
+                  )}
+
+                  {/* Name */}
+                  {visibleColumns.has('name') && (
+                    <td className="px-6 py-4">
+                      <div 
+                          onClick={() => handleOpenDetails(patient)}
                         className="flex items-center gap-3 group cursor-pointer"
-                    >
+                      >
                         <div className="w-10 h-10 bg-gradient-to-br from-blue-100 to-blue-200 rounded-full flex items-center justify-center flex-shrink-0">
                           <User className="w-5 h-5 text-blue-600" />
                         </div>
                         <div>
                           <div className="font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
-                        {patient.name}
-                    </div>
+                          {patient.name}
+                      </div>
                         </div>
-                    </div>
-                  </td>
+                      </div>
+                    </td>
+                  )}
                   
                   {/* Contact Info with Inline Edit */}
-                  <td className="px-6 py-4">
+                  {visibleColumns.has('contactInfo') && visibleContactSubFields.size > 0 && (
+                    <td className="px-6 py-4">
                     <div className="flex flex-col gap-2">
-                        {/* Email Edit */}
+                      {/* Email */}
+                      {visibleContactSubFields.has('email') && (
                         <div className="flex items-center gap-2 group">
-                            <div className="p-1.5 bg-blue-100 rounded-lg">
-                              <Mail className="w-3.5 h-3.5 text-blue-600" />
-                            </div>
-                            {editingId === getPatientId(patient) && editingField === 'email' ? (
-                                <div className="flex items-center gap-1.5 animate-in fade-in">
-                                    <input 
-                                        autoFocus
-                                        disabled={isSavingInline}
-                                        className={`w-48 text-sm border-2 ${isSavingInline ? 'border-blue-400 bg-blue-50 text-gray-500' : 'border-blue-300'} rounded-lg px-2 py-1 outline-none transition-all focus:ring-2 focus:ring-blue-500`}
-                                        value={editValue}
-                                        onChange={(e) => setEditValue(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (isSavingInline) return;
-                                            if(e.key === 'Enter') saveInlineEdit(patient);
-                                            if(e.key === 'Escape') cancelInlineEdit();
-                                        }}
-                                    />
-                                    {isSavingInline ? (
-                                        <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                                    ) : (
-                                        <>
-                                            <button onClick={() => saveInlineEdit(patient)} className="p-1 text-green-600 hover:bg-green-50 rounded-lg transition-colors"><Check className="w-4 h-4"/></button>
-                                            <button onClick={cancelInlineEdit} className="p-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><X className="w-4 h-4"/></button>
-                                        </>
-                                    )}
-                                </div>
-                            ) : (
-                                <>
-                                    <span className="text-sm text-gray-700 font-medium">{patient.email}</span>
-                                    <button 
-                                        onClick={() => startInlineEdit(patient, 'email')}
-                                        className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity p-1 hover:bg-blue-50 rounded"
-                                    >
-                                        <Edit className="w-3.5 h-3.5" />
-                                    </button>
-                                </>
-                            )}
-                        </div>
+                          <div className="p-1.5 bg-blue-100 rounded-lg">
+                            <Mail className="w-3.5 h-3.5 text-blue-600" />
+                          </div>
+                              {editingId === getPatientId(patient) && editingField === 'email' ? (
+                            <div className="flex items-center gap-1.5 animate-in fade-in">
+                                      <input 
+                                          autoFocus
+                                          disabled={isSavingInline}
+                                className={`w-48 text-sm border-2 ${isSavingInline ? 'border-blue-400 bg-blue-50 text-gray-500' : 'border-blue-300'} rounded-lg px-2 py-1 outline-none transition-all focus:ring-2 focus:ring-blue-500`}
+                                          value={editValue}
+                                          onChange={(e) => setEditValue(e.target.value)}
+                                          onKeyDown={(e) => {
+                                              if (isSavingInline) return;
+                                  if (e.key === 'Enter') saveInlineEdit(patient);
+                                  if (e.key === 'Escape') cancelInlineEdit();
+                                          }}
+                                      />
+                                      {isSavingInline ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                                      ) : (
+                                          <>
+                                  <button 
+                                    onClick={() => saveInlineEdit(patient)} 
+                                    className="p-1 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                  >
+                                    <Check className="w-4 h-4"/>
+                                  </button>
+                                  <button 
+                                    onClick={cancelInlineEdit} 
+                                    className="p-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                  >
+                                    <X className="w-4 h-4"/>
+                                  </button>
+                                          </>
+                                      )}
+                                  </div>
+                              ) : (
+                                  <>
+                              <span className="text-sm text-gray-700 font-medium">{patient.email}</span>
+                                      <button 
+                                          onClick={() => startInlineEdit(patient, 'email')}
+                                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity p-1 hover:bg-blue-50 rounded"
+                                      >
+                                <Edit className="w-3.5 h-3.5" />
+                                      </button>
+                                  </>
+                              )}
+                          </div>
+                      )}
 
-                        {/* Phone Edit */}
+                      {/* Phone */}
+                      {visibleContactSubFields.has('number') && (
                         <div className="flex items-center gap-2 group">
-                             <div className="p-1.5 bg-green-100 rounded-lg">
-                               <Phone className="w-3.5 h-3.5 text-green-600" />
-                             </div>
-                             {editingId === getPatientId(patient) && editingField === 'mobileNumber' ? (
-                                <div className="flex items-center gap-1.5 animate-in fade-in">
-                                    <input 
-                                        autoFocus
-                                        disabled={isSavingInline}
-                                        className={`w-36 text-sm border-2 ${isSavingInline ? 'border-blue-400 bg-blue-50 text-gray-500' : 'border-blue-300'} rounded-lg px-2 py-1 outline-none transition-all focus:ring-2 focus:ring-blue-500`}
-                                        value={editValue}
-                                        onChange={(e) => setEditValue(e.target.value)}
-                                        onKeyDown={(e) => {
-                                            if (isSavingInline) return;
-                                            if(e.key === 'Enter') saveInlineEdit(patient);
-                                            if(e.key === 'Escape') cancelInlineEdit();
-                                        }}
-                                    />
-                                    {isSavingInline ? (
-                                        <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                                    ) : (
-                                        <>
-                                            <button onClick={() => saveInlineEdit(patient)} className="p-1 text-green-600 hover:bg-green-50 rounded-lg transition-colors"><Check className="w-4 h-4"/></button>
-                                            <button onClick={cancelInlineEdit} className="p-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><X className="w-4 h-4"/></button>
-                                        </>
-                                    )}
-                                </div>
-                             ) : (
-                                <>
-                                    <span className="text-sm text-gray-600">{patient.mobileNumber}</span>
-                                    <button 
-                                        onClick={() => startInlineEdit(patient, 'mobileNumber')}
-                                        className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity p-1 hover:bg-blue-50 rounded"
-                                    >
-                                        <Edit className="w-3.5 h-3.5" />
-                                    </button>
-                                </>
-                             )}
-                        </div>
+                          <div className="p-1.5 bg-green-100 rounded-lg">
+                            <Phone className="w-3.5 h-3.5 text-green-600" />
+                          </div>
+                               {editingId === getPatientId(patient) && editingField === 'mobileNumber' ? (
+                            <div className="flex items-center gap-1.5 animate-in fade-in w-full">
+                                      <div className="flex-1">
+                                        <PhoneInput
+                                          value={editValue}
+                                          onChange={(value) => setEditValue(value || '')}
+                                          defaultCountry="IN"
+                                          placeholder="Enter mobile number"
+                                          className={`text-sm ${isSavingInline ? 'opacity-60' : ''}`}
+                                          disabled={isSavingInline}
+                                        />
+                                      </div>
+                                      {isSavingInline ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                                      ) : (
+                                          <>
+                                  <button 
+                                    onClick={() => saveInlineEdit(patient)} 
+                                    className="p-1 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                  >
+                                    <Check className="w-4 h-4"/>
+                                  </button>
+                                  <button 
+                                    onClick={cancelInlineEdit} 
+                                    className="p-1 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                  >
+                                    <X className="w-4 h-4"/>
+                                  </button>
+                                          </>
+                                      )}
+                                  </div>
+                               ) : (
+                                  <>
+                              <span className="text-sm text-gray-600">{patient.mobileNumber}</span>
+                                      <button 
+                                          onClick={() => startInlineEdit(patient, 'mobileNumber')}
+                                className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-blue-600 transition-opacity p-1 hover:bg-blue-50 rounded"
+                                      >
+                                <Edit className="w-3.5 h-3.5" />
+                                      </button>
+                                  </>
+                               )}
+                          </div>
+                      )}
                     </div>
                   </td>
+                  )}
 
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-800">
-                      {patient.gender || 'N/A'}
-                    </span>
-                  </td>
-
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {patient.age ? (
-                      <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 border border-blue-200">
-                        {patient.age} {patient.age === 1 ? 'year' : 'years'}
+                  {/* Gender */}
+                  {visibleColumns.has('gender') && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-800">
+                        {patient.gender || 'N/A'}
                       </span>
-                    ) : (
-                      <span className="text-sm text-gray-400">N/A</span>
-                    )}
-                  </td>
+                    </td>
+                  )}
 
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {patient.bloodGroup ? (
-                      <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
-                        {patient.bloodGroup}
-                    </span>
-                    ) : (
-                      <span className="text-sm text-gray-400">N/A</span>
-                    )}
-                  </td>
+                  {/* Age */}
+                  {visibleColumns.has('age') && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {patient.age ? (
+                        <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700 border border-blue-200">
+                          {patient.age} {patient.age === 1 ? 'year' : 'years'}
+                      </span>
+                      ) : (
+                        <span className="text-sm text-gray-400">N/A</span>
+                      )}
+                    </td>
+                  )}
 
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center gap-2 text-sm">
+                  {/* Blood Group */}
+                  {visibleColumns.has('bloodGroup') && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {patient.bloodGroup ? (
+                        <span className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 border border-red-200">
+                          {patient.bloodGroup}
+                      </span>
+                      ) : (
+                        <span className="text-sm text-gray-400">N/A</span>
+                      )}
+                    </td>
+                  )}
+
+                  {/* Last Visit */}
+                  {visibleColumns.has('lastVisitDate') && (
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center gap-2 text-sm">
                         <div className="p-1.5 bg-purple-100 rounded-lg">
                           <CalendarDays className="w-4 h-4 text-purple-600" />
                         </div>
                         <div>
-                    {patient.lastVisitDateTime 
-                            ? (
-                              <>
-                                <div className="font-medium text-gray-900">
-                                  {new Date(patient.lastVisitDateTime).toLocaleString('en-US', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          hour12: true
-                                  })}
-                                </div>
-                              </>
-                            )
-                            : patient.lastVisitDate && patient.lastVisitDate !== '-' ? (
-                              <>
-                                <div className="font-medium text-gray-900">{new Date(patient.lastVisitDate).toLocaleDateString()}</div>
-                                <div className="text-xs text-gray-500">Last visit</div>
-                              </>
-                            ) : (
-                              <span className="text-gray-400">No visits</span>
-                            )}
+                          {patient.lastVisitDateTime ? (
+                            <div className="font-medium text-gray-900">
+                              {formatDateTime(patient.lastVisitDateTime)}
+                            </div>
+                          ) : patient.lastVisitDate && patient.lastVisitDate !== '-' ? (
+                            <>
+                              <div className="font-medium text-gray-900">
+                                {formatDate(patient.lastVisitDate)}
+                              </div>
+                              <div className="text-xs text-gray-500">Last visit</div>
+                            </>
+                          ) : (
+                            <span className="text-gray-400">No visits</span>
+                          )}
                         </div>
-                    </div>
-                  </td>
-                  {/* <td className="px-6 py-4">
-                    <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded text-xs font-medium">
-                        {patient.appointmentDate}
-                    </span>
-                  </td> */}
-                  <td className="px-6 py-4 whitespace-nowrap text-right">
-                    <button 
-                        onClick={() => handleOpenModal(patient)}
+                      </div>
+                    </td>
+                  )}
+
+                  {/* Actions */}
+                  {visibleColumns.has('actions') && (
+                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                      <button 
+                          onClick={() => handleOpenModal(patient)}
                         className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all hover:shadow-md"
                         title="Edit Patient"
-                    >
-                      <Edit className="w-4 h-4" />
-                    </button>
-                  </td>
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                    </td>
+                  )}
                 </tr>
               )) : (
                 <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
-                      <div className="flex flex-col items-center justify-center">
-                        <User className="w-12 h-12 text-gray-300 mb-3" />
-                        <p className="text-gray-500 font-medium">No patients found</p>
-                        <p className="text-sm text-gray-400 mt-1">Try adjusting your search or add a new patient</p>
-                      </div>
-                    </td>
+                  <td colSpan={visibleColumns.size} className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center justify-center">
+                      <User className="w-12 h-12 text-gray-300 mb-3" />
+                      <p className="text-gray-500 font-medium">No patients found</p>
+                      <p className="text-sm text-gray-400 mt-1">Try adjusting your search or add a new patient</p>
+                    </div>
+                  </td>
                 </tr>
               )}
             </tbody>
@@ -821,13 +1323,15 @@ const Patients = () => {
                 <span className="text-sm text-gray-500">Rows per page:</span>
                 <select 
                     value={itemsPerPage}
-                    onChange={(e) => { setItemsPerPage(Number(e.target.value)); setCurrentPage(1); }}
+              onChange={(e) => { 
+                setItemsPerPage(Number(e.target.value)); 
+                setCurrentPage(DEFAULT_CURRENT_PAGE); 
+              }}
                     className="px-2 py-1 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:border-blue-500 cursor-pointer outline-none"
                 >
-                    <option value={5}>5</option>
-                    <option value={10}>10</option>
-                    <option value={20}>20</option>
-                    <option value={50}>50</option>
+              {PAGINATION_OPTIONS.map(option => (
+                <option key={option} value={option}>{option}</option>
+              ))}
                 </select>
             </div>
             <div className="flex items-center gap-2">
@@ -854,156 +1358,185 @@ const Patients = () => {
 
       {/* Create/Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col animate-in fade-in zoom-in duration-200 overflow-hidden">
-            {/* Header - Fixed */}
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-t-2xl flex justify-between items-center flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
-                  <User className="w-5 h-5 text-white" />
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-2 sm:p-4 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-3xl max-h-[98vh] sm:max-h-[95vh] flex flex-col overflow-hidden transform transition-all animate-in zoom-in-95 duration-300">
+            {/* Enhanced Header */}
+            <div className="bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 p-4 sm:p-6 flex justify-between items-center flex-shrink-0 relative overflow-hidden">
+              <div className="absolute inset-0 opacity-10" style={{
+                backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+              }}></div>
+              <div className="flex items-center gap-2 sm:gap-4 relative z-10 flex-1 min-w-0">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 bg-white/20 rounded-xl sm:rounded-2xl flex items-center justify-center backdrop-blur-md border border-white/30 shadow-lg flex-shrink-0">
+                  <User className="w-5 h-5 sm:w-6 sm:h-6 md:w-7 md:h-7 text-white" />
                 </div>
-                <div>
-                  <h2 className="text-xl font-bold text-white">{editingPatient ? 'Edit Patient' : 'Add New Patient'}</h2>
-                  <p className="text-xs text-blue-100">{editingPatient ? 'Update patient information' : 'Fill in the details to create a new patient'}</p>
+                <div className="min-w-0">
+                  <h2 className="text-lg sm:text-xl md:text-2xl font-bold text-white mb-0.5 sm:mb-1 truncate">
+                    {editingPatient ? 'Edit Patient' : 'Add New Patient'}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-blue-100/90 hidden sm:block">
+                    {editingPatient ? 'Update patient information below' : 'Fill in the details to create a new patient record'}
+                  </p>
                 </div>
               </div>
               <button 
                 onClick={() => setShowModal(false)} 
-                className="p-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors backdrop-blur-sm"
+                className="p-2 sm:p-2.5 bg-white/20 hover:bg-white/30 text-white rounded-lg sm:rounded-xl transition-all backdrop-blur-md border border-white/20 hover:border-white/30 hover:scale-110 relative z-10 flex-shrink-0 ml-2"
+                aria-label="Close modal"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
             
             {/* Scrollable Content */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-              <form onSubmit={formik.handleSubmit} className="p-6 space-y-6">
+            <div className="flex-1 overflow-y-auto custom-scrollbar bg-gradient-to-b from-gray-50 to-white">
+              <form onSubmit={formik.handleSubmit} className="p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8">
               {/* Basic Information Section */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
-                  <User className="w-4 h-4 text-blue-600" />
-                  <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Basic Information</h3>
+                <div className="space-y-4 sm:space-y-5 bg-white rounded-xl sm:rounded-2xl p-4 sm:p-6 shadow-sm border border-gray-100">
+                  <div className="flex items-center gap-3 pb-3 border-b-2 border-blue-100">
+                    <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
+                      <User className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-gray-800">Basic Information</h3>
+                      <p className="text-xs text-gray-500">Patient's personal details</p>
+                    </div>
                 </div>
                 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                    <User className="w-4 h-4 text-gray-400" />
-                    Full Name <span className="text-red-500">*</span>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                      <div className="w-5 h-5 bg-blue-50 rounded-lg flex items-center justify-center">
+                        <User className="w-3.5 h-3.5 text-blue-600" />
+                      </div>
+                      Full Name <span className="text-red-500 font-bold">*</span>
                   </label>
                   <input 
                       name="name"
                       type="text" 
-                      placeholder="John Doe"
-                      className={`w-full bg-gray-50 text-gray-900 border ${formik.touched.name && formik.errors.name ? 'border-red-500 bg-red-50' : 'border-gray-200'} rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all`}
+                      placeholder="Enter patient's full name"
+                      className={`w-full bg-white text-gray-900 border-2 ${formik.touched.name && formik.errors.name ? 'border-red-400 bg-red-50/50' : 'border-gray-200 hover:border-gray-300'} rounded-xl px-4 py-3.5 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400 font-medium`}
                       value={formik.values.name}
                       onChange={formik.handleChange}
                       onBlur={formik.handleBlur}
                   />
                   {formik.touched.name && formik.errors.name && (
-                    <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                      <X className="w-3 h-3" />
+                      <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                        <X className="w-3.5 h-3.5" />
                       {formik.errors.name}
                     </div>
                   )}
                 </div>
               </div>
+
               {/* Contact Information Section */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
-                  <Phone className="w-4 h-4 text-blue-600" />
-                  <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Contact Information</h3>
+                <div className="space-y-5 bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                  <div className="flex items-center gap-3 pb-3 border-b-2 border-green-100">
+                    <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center">
+                      <Phone className="w-5 h-5 text-green-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-gray-800">Contact Information</h3>
+                      <p className="text-xs text-gray-500">Email and phone details</p>
+                    </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                      <Mail className="w-4 h-4 text-gray-400" />
-                      Email <span className="text-red-500">*</span>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                        <div className="w-5 h-5 bg-blue-50 rounded-lg flex items-center justify-center">
+                          <Mail className="w-3.5 h-3.5 text-blue-600" />
+                        </div>
+                        Email Address <span className="text-red-500 font-bold">*</span>
                     </label>
                     <input 
                         name="email"
                         type="email" 
-                        placeholder="patient@gmail.com"
-                        className={`w-full bg-gray-50 text-gray-900 border ${formik.touched.email && formik.errors.email ? 'border-red-500 bg-red-50' : 'border-gray-200'} rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all`}
+                        placeholder="patient@example.com"
+                        className={`w-full bg-white text-gray-900 border-2 ${formik.touched.email && formik.errors.email ? 'border-red-400 bg-red-50/50' : 'border-gray-200 hover:border-gray-300'} rounded-xl px-4 py-3.5 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400 font-medium`}
                         value={formik.values.email}
                         onChange={formik.handleChange}
                         onBlur={formik.handleBlur}
                     />
                     {formik.touched.email && formik.errors.email && (
-                      <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                        <X className="w-3 h-3" />
+                        <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                          <X className="w-3.5 h-3.5" />
                         {formik.errors.email}
                       </div>
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                      <Phone className="w-4 h-4 text-gray-400" />
-                      Mobile Number <span className="text-red-500">*</span>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                        <div className="w-5 h-5 bg-green-50 rounded-lg flex items-center justify-center">
+                          <Phone className="w-3.5 h-3.5 text-green-600" />
+                        </div>
+                        Mobile Number <span className="text-red-500 font-bold">*</span>
                     </label>
-                    <input 
-                        name="mobileNumber"
-                        type="tel" 
-                        placeholder="+91 98765 43210"
-                        className={`w-full bg-gray-50 text-gray-900 border ${formik.touched.mobileNumber && formik.errors.mobileNumber ? 'border-red-500 bg-red-50' : 'border-gray-200'} rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all`}
-                        value={formik.values.mobileNumber}
-                        onChange={formik.handleChange}
-                        onBlur={formik.handleBlur}
-                    />
+                    <div className="relative">
+                        <PhoneInput
+                            value={formik.values.mobileNumber}
+                            onChange={(value) => {
+                                formik.setFieldValue('mobileNumber', value || '');
+                                formik.setFieldTouched('mobileNumber', true);
+                            }}
+                            defaultCountry="IN"
+                            placeholder="Enter mobile number"
+                            className={formik.touched.mobileNumber && formik.errors.mobileNumber ? 'border-red-400 focus:border-red-500 bg-red-50/50' : ''}
+                        />
+                    </div>
                     {formik.touched.mobileNumber && formik.errors.mobileNumber && (
-                      <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                        <X className="w-3 h-3" />
+                        <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                          <X className="w-3.5 h-3.5" />
                         {formik.errors.mobileNumber}
                       </div>
                     )}
                   </div>
                 </div>
               </div>
+
               {/* Personal Details Section */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
-                  <User className="w-4 h-4 text-blue-600" />
-                  <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Personal Details</h3>
+                <div className="space-y-5 bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                  <div className="flex items-center gap-3 pb-3 border-b-2 border-purple-100">
+                    <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
+                      <User className="w-5 h-5 text-purple-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-gray-800">Personal Details</h3>
+                      <p className="text-xs text-gray-500">Gender, age, and blood group</p>
+                    </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-5">
+                    {/* Gender */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                      <User className="w-4 h-4 text-gray-400" />
-                      Gender <span className="text-red-500">*</span>
+                      <label className="block text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                        <div className="w-5 h-5 bg-purple-50 rounded-lg flex items-center justify-center">
+                          <User className="w-3.5 h-3.5 text-purple-600" />
+                        </div>
+                        Gender <span className="text-red-500 font-bold">*</span>
                     </label>
-                    <div className="grid grid-cols-3 gap-3">
-                      {[
-                        { value: 'Male', icon: '👨', color: 'blue' },
-                        { value: 'Female', icon: '👩', color: 'pink' },
-                        { value: 'Other', icon: '👤', color: 'purple' }
-                      ].map((option) => {
+                      <div className="grid grid-cols-3 gap-2.5">
+                        {GENDER_OPTIONS.map((option) => {
                         const isSelected = formik.values.gender === option.value;
-                        let buttonClasses = 'relative p-4 rounded-xl border-2 transition-all duration-200 focus:outline-none ';
+                          let buttonClasses = 'relative p-3.5 rounded-xl border-2 transition-all duration-200 focus:outline-none group ';
                         
                         if (option.color === 'blue') {
                           buttonClasses += isSelected 
-                            ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-md shadow-blue-500/20 hover:border-blue-600 focus:ring-2 focus:ring-blue-500/20' 
-                            : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50/50 focus:ring-2 focus:ring-blue-500/20';
+                              ? 'border-blue-500 bg-blue-50 text-blue-700 shadow-lg shadow-blue-500/30 hover:border-blue-600 hover:shadow-xl focus:ring-2 focus:ring-blue-500/30 scale-105' 
+                              : 'border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/70 hover:shadow-md focus:ring-2 focus:ring-blue-500/20';
                         } else if (option.color === 'pink') {
                           buttonClasses += isSelected 
-                            ? 'border-pink-500 bg-pink-50 text-pink-700 shadow-md shadow-pink-500/20 hover:border-pink-600 focus:ring-2 focus:ring-pink-500/20' 
-                            : 'border-gray-200 hover:border-pink-300 hover:bg-pink-50/50 focus:ring-2 focus:ring-pink-500/20';
+                              ? 'border-pink-500 bg-pink-50 text-pink-700 shadow-lg shadow-pink-500/30 hover:border-pink-600 hover:shadow-xl focus:ring-2 focus:ring-pink-500/30 scale-105' 
+                              : 'border-gray-200 bg-white hover:border-pink-300 hover:bg-pink-50/70 hover:shadow-md focus:ring-2 focus:ring-pink-500/20';
                         } else {
                           buttonClasses += isSelected 
-                            ? 'border-purple-500 bg-purple-50 text-purple-700 shadow-md shadow-purple-500/20 hover:border-purple-600 focus:ring-2 focus:ring-purple-500/20' 
-                            : 'border-gray-200 hover:border-purple-300 hover:bg-purple-50/50 focus:ring-2 focus:ring-purple-500/20';
+                              ? 'border-purple-500 bg-purple-50 text-purple-700 shadow-lg shadow-purple-500/30 hover:border-purple-600 hover:shadow-xl focus:ring-2 focus:ring-purple-500/30 scale-105' 
+                              : 'border-gray-200 bg-white hover:border-purple-300 hover:bg-purple-50/70 hover:shadow-md focus:ring-2 focus:ring-purple-500/20';
                         }
                         
                         if (formik.touched.gender && formik.errors.gender) {
-                          buttonClasses += ' border-red-500';
+                            buttonClasses += ' border-red-400';
                         }
                         
-                        if (isSelected) {
-                          buttonClasses += ' scale-105';
-                        }
-                        
-                        let badgeClasses = 'absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center shadow-lg ';
+                          let badgeClasses = 'absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center shadow-lg animate-in zoom-in duration-200 ';
                         if (option.color === 'blue') {
                           badgeClasses += 'bg-blue-500';
                         } else if (option.color === 'pink') {
@@ -1023,13 +1556,13 @@ const Patients = () => {
                             onBlur={() => formik.setFieldTouched('gender', true)}
                             className={buttonClasses}
                           >
-                            <div className="flex flex-col items-center gap-2">
-                              <span className="text-2xl">{option.icon}</span>
-                              <span className="font-semibold text-sm">{option.value}</span>
+                              <div className="flex flex-col items-center gap-1.5">
+                                <span className="text-2xl transform group-hover:scale-110 transition-transform">{option.icon}</span>
+                                <span className="font-semibold text-xs">{option.value}</span>
                             </div>
                             {isSelected && (
                               <div className={badgeClasses}>
-                                <Check className="w-4 h-4 text-white" />
+                                  <Check className="w-3 h-3 text-white" />
                               </div>
                             )}
                           </button>
@@ -1037,203 +1570,196 @@ const Patients = () => {
                       })}
                     </div>
                     {formik.touched.gender && formik.errors.gender && (
-                      <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                        <X className="w-3 h-3" />
+                        <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                          <X className="w-3.5 h-3.5" />
                         {formik.errors.gender}
                       </div>
                     )}
-                    {formik.values.gender && (
-                      <div className="mt-2 text-xs text-gray-500 flex items-center gap-1">
-                        <User className="w-3 h-3 text-blue-500" />
-                        Selected: <span className="font-medium text-gray-700">{formik.values.gender}</span>
                       </div>
-                    )}
-                  </div>
+
+                    {/* Blood Group - Separate after Gender */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                      <User className="w-4 h-4 text-gray-400" />
-                      Age
+                      <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                        <div className="w-5 h-5 bg-red-50 rounded-lg flex items-center justify-center">
+                          <Droplet className="w-3.5 h-3.5 text-red-600" />
+                        </div>
+                      Blood Group
                     </label>
-                    <input 
+                      <div className="relative">
+                        <select
+                          name="bloodGroup"
+                          className={`w-full bg-white text-gray-900 border-2 ${formik.touched.bloodGroup && formik.errors.bloodGroup ? 'border-red-400 bg-red-50/50' : 'border-gray-200 hover:border-gray-300'} rounded-xl px-4 py-3.5 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all cursor-pointer font-medium appearance-none pr-10`}
+                          value={formik.values.bloodGroup}
+                          onChange={formik.handleChange}
+                          onBlur={formik.handleBlur}
+                        >
+                          <option value="">Select Blood Group</option>
+                          <option value="A+">A+</option>
+                          <option value="A-">A-</option>
+                          <option value="B+">B+</option>
+                          <option value="B-">B-</option>
+                          <option value="AB+">AB+</option>
+                          <option value="AB-">AB-</option>
+                          <option value="O+">O+</option>
+                          <option value="O-">O-</option>
+                        </select>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+                          <ChevronDown className="w-5 h-5" />
+                                </div>
+                    </div>
+                    {formik.touched.bloodGroup && formik.errors.bloodGroup && (
+                        <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                          <X className="w-3.5 h-3.5" />
+                          {formik.errors.bloodGroup}
+                        </div>
+                    )}
+                    </div>
+
+                    {/* Age - Below Blood Group */}
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                        <div className="w-5 h-5 bg-orange-50 rounded-lg flex items-center justify-center">
+                          <CalendarDays className="w-3.5 h-3.5 text-orange-600" />
+                        </div>
+                        Age
+                      </label>
+                      <input 
                         name="age"
                         type="number" 
                         min="0"
                         max="150"
-                        placeholder="25"
-                        className={`w-full bg-gray-50 text-gray-900 border ${formik.touched.age && formik.errors.age ? 'border-red-500 bg-red-50' : 'border-gray-200'} rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all`}
+                        placeholder="Enter age"
+                        className={`w-full bg-white text-gray-900 border-2 ${formik.touched.age && formik.errors.age ? 'border-red-400 bg-red-50/50' : 'border-gray-200 hover:border-gray-300'} rounded-xl px-4 py-3.5 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400 font-medium`}
                         value={formik.values.age || ''}
                         onChange={(e) => {
                           const value = e.target.value === '' ? undefined : parseInt(e.target.value);
                           formik.setFieldValue('age', value);
                         }}
                         onBlur={formik.handleBlur}
-                    />
-                    {formik.touched.age && formik.errors.age && (
-                      <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                        <X className="w-3 h-3" />
-                        {formik.errors.age}
-                      </div>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                      <Droplet className="w-4 h-4 text-gray-400" />
-                      Blood Group
-                      {formik.touched.bloodGroup && formik.errors.bloodGroup && (
-                          <span className="text-red-500 ml-1">*</span>
-                      )}
-                    </label>
-                    <div className="grid grid-cols-4 gap-2">
-                        {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map((group) => (
-                            <button
-                                key={group}
-                                type="button"
-                                onClick={() => {
-                                    formik.setFieldValue('bloodGroup', formik.values.bloodGroup === group ? '' : group);
-                                    formik.setFieldTouched('bloodGroup', true);
-                                }}
-                                onBlur={() => formik.setFieldTouched('bloodGroup', true)}
-                                className={`
-                                    relative p-2.5 rounded-xl border-2 transition-all duration-200
-                                    ${formik.values.bloodGroup === group
-                                        ? 'border-red-500 bg-red-50 text-red-700 shadow-md shadow-red-500/20 scale-105'
-                                        : 'border-gray-200 bg-white text-gray-700 hover:border-red-300 hover:bg-red-50/50'
-                                    }
-                                    ${formik.touched.bloodGroup && formik.errors.bloodGroup ? 'border-red-500' : ''}
-                                    focus:outline-none focus:ring-2 focus:ring-red-500/20
-                                `}
-                            >
-                                <div className="flex flex-col items-center gap-1">
-                                    <Droplet className={`w-4 h-4 ${formik.values.bloodGroup === group ? 'text-red-600' : 'text-gray-400'}`} />
-                                    <span className="font-bold text-xs">{group}</span>
-                                </div>
-                                {formik.values.bloodGroup === group && (
-                                    <div className="absolute -top-1 -right-1">
-                                        <div className="w-5 h-5 bg-red-500 rounded-full flex items-center justify-center shadow-lg">
-                                            <Check className="w-3 h-3 text-white" />
-                                        </div>
-                                    </div>
-                                )}
-                            </button>
-                        ))}
-                    </div>
-                    {formik.touched.bloodGroup && formik.errors.bloodGroup && (
-                        <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                          <X className="w-3 h-3" />
-                          {formik.errors.bloodGroup}
-                        </div>
-                    )}
-                    {formik.values.bloodGroup && (
-                        <div className="mt-2 text-xs text-gray-500 flex items-center gap-1">
-                            <Droplet className="w-3 h-3 text-red-500" />
-                            Selected: <span className="font-medium text-gray-700">{formik.values.bloodGroup}</span>
+                      />
+                      {formik.touched.age && formik.errors.age && (
+                        <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                          <X className="w-3.5 h-3.5" />
+                          {formik.errors.age}
                         </div>
                     )}
                   </div>
                 </div>
               </div>
-              {/* Location Section */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 pb-2 border-b border-gray-200">
-                  <MapPin className="w-4 h-4 text-blue-600" />
-                  <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Location</h3>
+
+                {/* Location Information Section */}
+                <div className="space-y-5 bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+                  <div className="flex items-center gap-3 pb-3 border-b-2 border-indigo-100">
+                    <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center">
+                      <MapPin className="w-5 h-5 text-indigo-600" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-gray-800">Location Information</h3>
+                      <p className="text-xs text-gray-500">State, city, and address details</p>
+                    </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                      <MapPin className="w-4 h-4 text-gray-400" />
-                      State <span className="text-red-500">*</span>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                        <div className="w-5 h-5 bg-indigo-50 rounded-lg flex items-center justify-center">
+                          <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+                        </div>
+                        State
                     </label>
                     <SearchableSelect
                         options={indiaStates}
                         value={formik.values.state}
                         onChange={(value) => {
                           formik.setFieldValue('state', value);
-                          formik.setFieldValue('city', ''); // Reset city when state changes
+                          if (value) {
                           setAvailableCities(getCitiesByState(value));
+                          } else {
+                            setAvailableCities([]);
+                          }
+                          formik.setFieldValue('city', '');
                         }}
-                        onBlur={() => formik.setFieldTouched('state', true)}
                         placeholder="Select State"
-                        error={formik.touched.state && !!formik.errors.state}
+                        className={formik.touched.state && formik.errors.state ? 'border-red-400 bg-red-50/50' : ''}
                     />
                     {formik.touched.state && formik.errors.state && (
-                      <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                        <X className="w-3 h-3" />
+                        <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                          <X className="w-3.5 h-3.5" />
                         {formik.errors.state}
                       </div>
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                      <MapPin className="w-4 h-4 text-gray-400" />
-                      City <span className="text-red-500">*</span>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                        <div className="w-5 h-5 bg-indigo-50 rounded-lg flex items-center justify-center">
+                          <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+                        </div>
+                        City
                     </label>
                     <SearchableSelect
                         options={availableCities}
                         value={formik.values.city}
                         onChange={(value) => formik.setFieldValue('city', value)}
-                        onBlur={() => formik.setFieldTouched('city', true)}
-                        placeholder={formik.values.state ? 'Select City' : 'Select State First'}
-                        disabled={!formik.values.state}
-                        error={formik.touched.city && !!formik.errors.city}
+                        placeholder="Select City"
+                        disabled={!formik.values.state || availableCities.length === 0}
+                        className={formik.touched.city && formik.errors.city ? 'border-red-400 bg-red-50/50' : ''}
                     />
                     {formik.touched.city && formik.errors.city && (
-                      <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                        <X className="w-3 h-3" />
+                        <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                          <X className="w-3.5 h-3.5" />
                         {formik.errors.city}
                       </div>
                     )}
                   </div>
                 </div>
-                
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                    <MapPin className="w-4 h-4 text-gray-400" />
-                    Address <span className="text-xs text-gray-500 font-normal">(Optional)</span>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2.5 flex items-center gap-2">
+                      <div className="w-5 h-5 bg-indigo-50 rounded-lg flex items-center justify-center">
+                        <MapPin className="w-3.5 h-3.5 text-indigo-600" />
+                      </div>
+                      Full Address <span className="text-red-500 font-bold">*</span>
                   </label>
                   <textarea 
                       name="address"
                       rows={3}
-                      placeholder="123 Main Street, Sector 5, Near Park, City - 123456"
-                      className={`w-full bg-gray-50 text-gray-900 border ${formik.touched.address && formik.errors.address ? 'border-red-500 bg-red-50' : 'border-gray-200'} rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none resize-none transition-all`}
+                      placeholder="Enter complete address (street, area, landmark)"
+                      className={`w-full bg-white text-gray-900 border-2 ${formik.touched.address && formik.errors.address ? 'border-red-400 bg-red-50/50' : 'border-gray-200 hover:border-gray-300'} rounded-xl px-4 py-3.5 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all resize-none placeholder:text-gray-400 font-medium`}
                       value={formik.values.address}
                       onChange={formik.handleChange}
                       onBlur={formik.handleBlur}
                   />
                   {formik.touched.address && formik.errors.address && (
-                    <div className="text-red-500 text-xs mt-1.5 flex items-center gap-1">
-                      <X className="w-3 h-3" />
+                      <div className="text-red-600 text-xs mt-2 flex items-center gap-1.5 bg-red-50 px-3 py-2 rounded-lg border border-red-200">
+                        <X className="w-3.5 h-3.5" />
                       {formik.errors.address}
                     </div>
                   )}
                 </div>
               </div>
               
-              {/* Action Buttons */}
-              <div className="pt-4 flex justify-end gap-3 border-t border-gray-200">
+                {/* Form Actions */}
+                <div className="flex flex-col sm:flex-row justify-end gap-2 sm:gap-3 pt-4 sm:pt-6 border-t-2 border-gray-100 bg-white rounded-b-xl sm:rounded-b-2xl -mx-4 sm:-mx-6 md:-mx-8 -mb-4 sm:-mb-6 md:-mb-8 px-4 sm:px-6 md:px-8 pb-4 sm:pb-6">
                 <button 
                   type="button" 
                   onClick={() => setShowModal(false)}
-                  className="px-6 py-2.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition font-medium flex items-center gap-2"
+                    className="w-full sm:w-auto px-6 sm:px-8 py-2.5 sm:py-3 bg-gray-100 text-gray-700 rounded-xl hover:bg-gray-200 transition-all font-semibold shadow-sm hover:shadow-md border border-gray-200 hover:border-gray-300 text-sm sm:text-base"
                 >
-                  <X className="w-4 h-4" />
                   Cancel
                 </button>
                 <button 
                   type="submit" 
                   disabled={formik.isSubmitting}
-                  className="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition shadow-lg shadow-blue-500/20 flex items-center gap-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full sm:w-auto px-6 sm:px-8 py-2.5 sm:py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transform hover:scale-105 disabled:hover:scale-100 text-sm sm:text-base"
                 >
                   {formik.isSubmitting ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {editingPatient ? 'Updating...' : 'Creating...'}
+                        <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                        <span>Saving...</span>
                     </>
                   ) : (
                     <>
-                      <Check className="w-4 h-4" />
-                      {editingPatient ? 'Update Patient' : 'Create Patient'}
+                        <Check className="w-4 h-4 sm:w-5 sm:h-5" />
+                        <span>{editingPatient ? 'Update Patient' : 'Create Patient'}</span>
                     </>
                   )}
                 </button>
@@ -1244,547 +1770,6 @@ const Patients = () => {
         </div>
       )}
 
-      {/* Details Modal */}
-      {showDetailsModal && selectedPatientDetails && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col animate-in fade-in zoom-in duration-200 overflow-hidden">
-                {/* Header with Gradient - Fixed */}
-                <div className="relative h-40 bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-600 flex-shrink-0">
-                     <button 
-                        onClick={() => setShowDetailsModal(false)}
-                        className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm"
-                     >
-                        <X className="w-5 h-5" />
-                     </button>
-                     <div className="absolute -bottom-16 left-8 flex items-end gap-4">
-                        <div className="w-32 h-32 bg-white rounded-2xl shadow-xl p-2 flex items-center justify-center">
-                            <div className="w-full h-full bg-gradient-to-br from-blue-100 to-indigo-100 rounded-xl flex items-center justify-center text-4xl font-bold text-blue-600">
-                                {selectedPatientDetails.name.charAt(0).toUpperCase()}
-                            </div>
-                        </div>
-                        <div className="mb-4">
-                             <h2 className="text-3xl font-bold text-gray-900 mb-1">{selectedPatientDetails.name}</h2>
-                             <div className="flex items-center gap-3 text-sm text-gray-500">
-                                <span className="flex items-center gap-1">
-                                    <User className="w-4 h-4" />
-                                    {selectedPatientDetails.gender}
-                                </span>
-                                <span>•</span>
-                                <span>ID: {getPatientId(selectedPatientDetails)}</span>
-                                {selectedPatientDetails.bloodGroup && (
-                                    <>
-                                        <span>•</span>
-                                        <span className="flex items-center gap-1">
-                                            <Droplet className="w-4 h-4 text-red-500" />
-                                            {selectedPatientDetails.bloodGroup}
-                                        </span>
-                                    </>
-                                )}
-                             </div>
-                        </div>
-                     </div>
-                </div>
-                
-                {/* Scrollable Content */}
-                <div className="flex-1 overflow-y-auto custom-scrollbar pt-20 px-8 pb-8 space-y-6">
-                     {/* Action Buttons */}
-                     <div className="flex justify-end gap-3">
-                        <button
-                            onClick={() => {
-                                setShowDetailsModal(false);
-                                handleOpenModal(selectedPatientDetails);
-                            }}
-                            className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition shadow-md shadow-blue-500/20 flex items-center gap-2 text-sm font-medium"
-                        >
-                            <Edit className="w-4 h-4" />
-                            Edit Patient
-                        </button>
-                     </div>
-
-                     {/* Info Grids */}
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {/* Contact Info */}
-                        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-5 rounded-xl border border-blue-100 shadow-sm">
-                            <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                <Phone className="w-4 h-4 text-blue-600" />
-                                Contact Information
-                            </h3>
-                            <div className="space-y-3">
-                                <div className="flex items-center gap-3 text-sm">
-                                    <div className="p-2 bg-white rounded-lg shadow-sm">
-                                        <Mail className="w-4 h-4 text-blue-600" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <div className="text-xs text-gray-500 mb-0.5">Email</div>
-                                        <div className="font-medium text-gray-900">{selectedPatientDetails.email}</div>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-3 text-sm">
-                                    <div className="p-2 bg-white rounded-lg shadow-sm">
-                                        <Phone className="w-4 h-4 text-blue-600" />
-                                    </div>
-                                    <div className="flex-1">
-                                        <div className="text-xs text-gray-500 mb-0.5">Mobile</div>
-                                        <div className="font-medium text-gray-900">{selectedPatientDetails.mobileNumber}</div>
-                                    </div>
-                                </div>
-                                {selectedPatientDetails.address && (
-                                    <div className="flex items-start gap-3 text-sm">
-                                        <div className="p-2 bg-white rounded-lg shadow-sm mt-0.5">
-                                            <MapPin className="w-4 h-4 text-blue-600" />
-                                        </div>
-                                        <div className="flex-1">
-                                            <div className="text-xs text-gray-500 mb-0.5">Address</div>
-                                            <div className="font-medium text-gray-900">{selectedPatientDetails.address}</div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                        
-                        {/* Location & Personal Info */}
-                        <div className="bg-gradient-to-br from-purple-50 to-pink-50 p-5 rounded-xl border border-purple-100 shadow-sm">
-                            <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                <Building2 className="w-4 h-4 text-purple-600" />
-                                Location & Details
-                            </h3>
-                            <div className="space-y-3">
-                                {selectedPatientDetails.city && (
-                                    <div className="flex items-center gap-3 text-sm">
-                                        <div className="p-2 bg-white rounded-lg shadow-sm">
-                                            <MapPin className="w-4 h-4 text-purple-600" />
-                                        </div>
-                                        <div className="flex-1">
-                                            <div className="text-xs text-gray-500 mb-0.5">City</div>
-                                            <div className="font-medium text-gray-900">{selectedPatientDetails.city}</div>
-                                        </div>
-                                    </div>
-                                )}
-                                {selectedPatientDetails.state && (
-                                    <div className="flex items-center gap-3 text-sm">
-                                        <div className="p-2 bg-white rounded-lg shadow-sm">
-                                            <MapPin className="w-4 h-4 text-purple-600" />
-                                        </div>
-                                        <div className="flex-1">
-                                            <div className="text-xs text-gray-500 mb-0.5">State</div>
-                                            <div className="font-medium text-gray-900">{selectedPatientDetails.state}</div>
-                                        </div>
-                                    </div>
-                                )}
-                                {selectedPatientDetails.bloodGroup && (
-                                    <div className="flex items-center gap-3 text-sm">
-                                        <div className="p-2 bg-white rounded-lg shadow-sm">
-                                            <Droplet className="w-4 h-4 text-red-500" />
-                                        </div>
-                                        <div className="flex-1">
-                                            <div className="text-xs text-gray-500 mb-0.5">Blood Group</div>
-                                            <div className="font-medium text-gray-900">{selectedPatientDetails.bloodGroup}</div>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                     </div>
-
-                     {/* Key Dates */}
-                     <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-5 rounded-xl border border-green-100 shadow-sm">
-                        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider mb-4 flex items-center gap-2">
-                            <CalendarDays className="w-4 h-4 text-green-600" />
-                            Important Dates
-                        </h3>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="bg-white p-3 rounded-lg shadow-sm">
-                                <div className="text-xs text-gray-500 mb-1">Last Visit</div>
-                                <div className="font-semibold text-gray-900 text-sm">
-                                    {selectedPatientDetails.lastVisitDateTime 
-                                        ? new Date(selectedPatientDetails.lastVisitDateTime).toLocaleDateString('en-US', {
-                                            year: 'numeric',
-                                            month: 'short',
-                                            day: 'numeric'
-                                          })
-                                        : selectedPatientDetails.lastVisitDate || 'N/A'}
-                                </div>
-                                {selectedPatientDetails.lastVisitDateTime && (
-                                    <div className="text-xs text-gray-400 mt-1">
-                                        {new Date(selectedPatientDetails.lastVisitDateTime).toLocaleTimeString('en-US', {
-                                            hour: '2-digit',
-                                            minute: '2-digit',
-                                            hour12: true
-                                          })}
-                                    </div>
-                                )}
-                            </div>
-                            {selectedPatientDetails.appointmentDate && (
-                                <div className="bg-white p-3 rounded-lg shadow-sm border-2 border-blue-200">
-                                    <div className="text-xs text-gray-500 mb-1">Next Appointment</div>
-                                    <div className="font-semibold text-blue-600 text-sm">{selectedPatientDetails.appointmentDate}</div>
-                                </div>
-                            )}
-                            {selectedPatientDetails.lastReminderDate && (
-                                <div className="bg-white p-3 rounded-lg shadow-sm">
-                                    <div className="text-xs text-gray-500 mb-1">Last Reminder</div>
-                                    <div className="font-semibold text-gray-900 text-sm">{selectedPatientDetails.lastReminderDate}</div>
-                                </div>
-                            )}
-                        </div>
-                     </div>
-
-                     {/* Medical History */}
-                     <div>
-                        <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
-                            <FileText className="w-5 h-5 text-blue-600" /> 
-                            Medical History
-                            {selectedPatientDetails.visits && selectedPatientDetails.visits.length > 0 && (
-                                <span className="ml-2 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
-                                    {selectedPatientDetails.visits.length} {selectedPatientDetails.visits.length === 1 ? 'Visit' : 'Visits'}
-                                </span>
-                            )}
-                        </h3>
-                        {selectedPatientDetails.visits && selectedPatientDetails.visits.length > 0 ? (
-                            <div className="space-y-3">
-                                {[...selectedPatientDetails.visits].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((visit) => (
-                                    <div key={visit.visitId} className="border border-gray-200 rounded-xl p-4 hover:bg-gray-50 hover:border-blue-200 transition-all shadow-sm">
-                                        <div className="flex justify-between items-start mb-3">
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                                                <span className="font-bold text-gray-900">{visit.diagnosis}</span>
-                                            </div>
-                                            <div className="flex items-center gap-2 text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-lg">
-                                                <Calendar className="w-3 h-3" />
-                                                {visit.date}
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-2">
-                                            <div className="bg-blue-50 p-2 rounded-lg">
-                                                <div className="text-xs text-gray-500 mb-1">Prescription</div>
-                                                <div className="text-sm font-medium text-gray-900">{visit.prescription || 'N/A'}</div>
-                                            </div>
-                                            {visit.notes && (
-                                                <div className="bg-gray-50 p-2 rounded-lg">
-                                                    <div className="text-xs text-gray-500 mb-1">Notes</div>
-                                                    <div className="text-sm text-gray-700 italic">"{visit.notes}"</div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl bg-gray-50">
-                                <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                                <p className="text-gray-400 font-medium">No medical history records found.</p>
-                                <p className="text-gray-400 text-sm mt-1">Medical visits will appear here once recorded.</p>
-                            </div>
-                        )}
-                     </div>
-                </div>
-             </div>
-        </div>
-      )}
-
-      {/* CSV Preview Modal */}
-      {showPreviewModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col animate-in fade-in zoom-in duration-200 overflow-hidden">
-            {/* Header */}
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 rounded-t-2xl flex justify-between items-center flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
-                  <FileText className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold text-white">CSV Import Preview</h2>
-                  <p className="text-xs text-blue-100">Review and confirm the data before importing ({csvAllData.length} total rows, showing first {csvPreviewData.length})</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => {
-                  setShowPreviewModal(false);
-                  setCsvPreviewData([]);
-                  setCsvAllData([]);
-                  setCsvFieldMapping({});
-                  setCsvHeaders([]);
-                }}
-                className="p-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors backdrop-blur-sm"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            {/* Field Mapping Section */}
-            <div className="p-6 border-b border-gray-200 bg-gray-50">
-              <h3 className="text-sm font-bold text-gray-700 mb-3">Field Mapping</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {csvHeaders.map((header) => {
-                  const mappedField = csvFieldMapping[header] || 'Not mapped';
-                  return (
-                    <div key={header} className="bg-white p-3 rounded-lg border border-gray-200">
-                      <div className="text-xs text-gray-500 mb-1">CSV Column</div>
-                      <div className="font-medium text-gray-900 text-sm mb-2">{header}</div>
-                      <select
-                        value={mappedField}
-                        onChange={(e) => {
-                          const newMapping = { ...csvFieldMapping };
-                          if (e.target.value === 'Not mapped') {
-                            delete newMapping[header];
-                          } else {
-                            newMapping[header] = e.target.value;
-                          }
-                          setCsvFieldMapping(newMapping);
-                        }}
-                        className="w-full text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:border-blue-500"
-                      >
-                        <option value="Not mapped">Not mapped</option>
-                        <option value="name">Name</option>
-                        <option value="email">Email</option>
-                        <option value="mobileNumber">Mobile Number</option>
-                        <option value="gender">Gender</option>
-                        <option value="bloodGroup">Blood Group</option>
-                        <option value="city">City</option>
-                        <option value="state">State</option>
-                        <option value="address">Address</option>
-                      </select>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Progress Bar (during import) */}
-            {isImporting && (
-              <div className="px-6 pt-4 border-b border-gray-200 bg-blue-50">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-blue-700">
-                    Importing patients... {importProgress.current} of {importProgress.total}
-                  </span>
-                  <span className="text-sm text-blue-600">
-                    {Math.round((importProgress.current / importProgress.total) * 100)}%
-                  </span>
-                </div>
-                <div className="w-full bg-blue-200 rounded-full h-2.5 mb-4">
-                  <div 
-                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                    style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
-                  ></div>
-                </div>
-              </div>
-            )}
-
-            {/* Preview Table */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="bg-gray-50 text-gray-500 text-sm font-medium border-b border-gray-200">
-                        <th className="p-3 text-xs w-16">Row</th>
-                        {csvHeaders.map((header) => (
-                          <th key={header} className="p-3 text-xs">
-                            {header}
-                            {csvFieldMapping[header] && (
-                              <span className="ml-1 text-blue-600">→ {csvFieldMapping[header]}</span>
-                            )}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {csvPreviewData.map((row, index) => {
-                        const rowNumber = index + 2; // +2 because row 0 is header, and we're 0-indexed
-                        const rowErrors = csvValidationErrors[rowNumber] || [];
-                        const hasErrors = rowErrors.length > 0;
-                        
-                        return (
-                          <tr key={index} className={`border-b border-gray-100 hover:bg-gray-50 ${hasErrors ? 'bg-red-50' : ''}`}>
-                            <td className="p-3 text-xs text-gray-500 font-medium w-16">
-                              Row {rowNumber}
-                              {hasErrors && (
-                                <span className="ml-1 text-red-600" title={rowErrors.join(', ')}>⚠</span>
-                              )}
-                            </td>
-                            {csvHeaders.map((header) => {
-                              const value = row[header] || '';
-                              const isMapped = csvFieldMapping[header];
-                              return (
-                                <td 
-                                  key={header} 
-                                  className={`p-3 text-sm ${isMapped ? 'text-gray-900 font-medium' : 'text-gray-400'}`}
-                                >
-                                  {value || '-'}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-              {csvPreviewData.length >= 10 && (
-                <p className="text-xs text-gray-500 mt-3 text-center">
-                  Showing first 10 rows. All {csvAllData.length} rows will be imported.
-                </p>
-              )}
-              {Object.keys(csvValidationErrors).length > 0 && (
-                <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <p className="text-sm font-medium text-yellow-800 mb-2">
-                    ⚠️ {Object.keys(csvValidationErrors).length} row(s) have validation errors
-                  </p>
-                  <p className="text-xs text-yellow-700">
-                    Rows with errors are highlighted in red. Please fix them or they will be skipped during import.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Action Buttons */}
-            <div className="p-6 border-t border-gray-200 flex justify-end gap-3 flex-shrink-0">
-              <button 
-                type="button" 
-                onClick={() => {
-                  setShowPreviewModal(false);
-                  setCsvPreviewData([]);
-                  setCsvAllData([]);
-                  setCsvFieldMapping({});
-                  setCsvHeaders([]);
-                }}
-                className="px-6 py-2.5 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-xl transition font-medium flex items-center gap-2"
-              >
-                <X className="w-4 h-4" />
-                Cancel
-              </button>
-              <button 
-                type="button"
-                onClick={handleConfirmImport}
-                disabled={isImporting || csvPreviewData.length === 0}
-                className="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition shadow-lg shadow-blue-500/20 flex items-center gap-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isImporting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Importing... ({importProgress.current}/{importProgress.total})
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4" />
-                    Confirm Import ({csvAllData.length} rows)
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Import Results Modal */}
-      {importResults && !isImporting && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col animate-in fade-in zoom-in duration-200 overflow-hidden">
-            {/* Header */}
-            <div className={`p-6 rounded-t-2xl flex justify-between items-center flex-shrink-0 ${
-              importResults.failed === 0 
-                ? 'bg-gradient-to-r from-green-600 to-emerald-600' 
-                : importResults.success > 0 
-                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600'
-                  : 'bg-gradient-to-r from-red-600 to-pink-600'
-            }`}>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center backdrop-blur-sm">
-                  {importResults.failed === 0 ? (
-                    <Check className="w-5 h-5 text-white" />
-                  ) : (
-                    <FileText className="w-5 h-5 text-white" />
-                  )}
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold text-white">Import Complete</h2>
-                  <p className="text-xs text-white/80">
-                    {importResults.success} successful, {importResults.failed} failed
-                  </p>
-                </div>
-              </div>
-              <button 
-                onClick={() => {
-                  setImportResults(null);
-                  setImportProgress({ current: 0, total: 0 });
-                }}
-                className="p-2 bg-white/20 hover:bg-white/30 text-white rounded-lg transition-colors backdrop-blur-sm"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            
-            {/* Results Content */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-6">
-              <div className="space-y-4">
-                {/* Summary */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-green-50 border border-green-200 p-4 rounded-xl">
-                    <div className="text-sm text-green-600 mb-1">Successfully Imported</div>
-                    <div className="text-2xl font-bold text-green-700">{importResults.success}</div>
-                  </div>
-                  <div className="bg-red-50 border border-red-200 p-4 rounded-xl">
-                    <div className="text-sm text-red-600 mb-1">Failed</div>
-                    <div className="text-2xl font-bold text-red-700">{importResults.failed}</div>
-                  </div>
-                </div>
-
-                {/* Error Details */}
-                {importResults.errors.length > 0 && (
-                  <div>
-                    <h3 className="text-sm font-bold text-gray-700 mb-3">Error Details</h3>
-                    <div className="bg-gray-50 rounded-xl border border-gray-200 max-h-64 overflow-y-auto">
-                      <table className="w-full text-sm">
-                        <thead className="bg-gray-100 sticky top-0">
-                          <tr>
-                            <th className="p-2 text-left text-xs text-gray-600">Row</th>
-                            <th className="p-2 text-left text-xs text-gray-600">Error</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {importResults.errors.map((error, index) => (
-                            <tr key={index} className="border-b border-gray-200">
-                              <td className="p-2 font-medium text-gray-900">{error.row}</td>
-                              <td className="p-2 text-red-600">{error.error}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {importResults.errors.length >= 50 && (
-                        <p className="p-3 text-xs text-gray-500 text-center">
-                          Showing first 50 errors. There may be more.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {importResults.success > 0 && (
-                  <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl">
-                    <p className="text-sm text-blue-700">
-                      ✓ {importResults.success} patient(s) have been added to your patient list.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Action Button */}
-            <div className="p-6 border-t border-gray-200 flex justify-end flex-shrink-0">
-              <button 
-                onClick={() => {
-                  setImportResults(null);
-                  setImportProgress({ current: 0, total: 0 });
-                }}
-                className="px-6 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition shadow-lg shadow-blue-500/20 font-medium"
-              >
-                Close
-              </button>
-                </div>
-             </div>
-        </div>
-      )}
     </div>
   );
 };
