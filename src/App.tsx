@@ -33,15 +33,15 @@ import { Loader2 } from 'lucide-react';
  */
 export const USE_MOCK_DATA = false;
 
-const Layout = ({ children }: { children?: React.ReactNode }) => {
+const Layout = ({ children }) => {
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar />
       <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
         <MobileNav />
-        {/* <main className="flex-1 overflow-y-auto">
+        { <main className="flex-1 overflow-y-auto">
           {children}
-        </main> */}
+        </main> }
         {/* Global AI Chat Assistant - Commented out per request */}
         {/* <AIChat /> */}
       </div>
