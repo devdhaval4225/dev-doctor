@@ -11,9 +11,7 @@ import {
   Shield,
   Clock,
   Zap,
-  Star,
-  TrendingUp,
-  Award
+  Mail
 } from 'lucide-react';
 
 const Landing = () => {
@@ -22,170 +20,229 @@ const Landing = () => {
   const features = [
     {
       icon: Calendar,
-      title: 'Appointment Management',
-      description: 'Schedule and manage appointments seamlessly with an intuitive calendar interface.',
-      color: 'text-blue-600 bg-blue-50'
+      title: 'Simple Scheduling',
+      description: 'Manage appointments without complexity.'
     },
     {
       icon: Users,
-      title: 'Patient Management',
-      description: 'Maintain comprehensive patient records with easy access to medical history.',
-      color: 'text-green-600 bg-green-50'
+      title: 'Patient Records',
+      description: 'All patient data in one secure place.'
     },
     {
       icon: Activity,
-      title: 'Real-time Updates',
-      description: 'Get instant notifications and updates about appointments and patient activities.',
-      color: 'text-purple-600 bg-purple-50'
-    },
-    {
-      icon: Shield,
-      title: 'Secure & Private',
-      description: 'Your data is protected with enterprise-grade security and privacy measures.',
-      color: 'text-red-600 bg-red-50'
-    },
-    {
-      icon: Clock,
-      title: 'Time Efficient',
-      description: 'Streamline your workflow and save time with automated scheduling and reminders.',
-      color: 'text-orange-600 bg-orange-50'
-    },
-    {
-      icon: Heart,
-      title: 'Patient Care Focus',
-      description: 'Focus on what matters most - providing excellent care to your patients.',
-      color: 'text-pink-600 bg-pink-50'
+      title: 'Daily Overview',
+      description: 'Know what’s happening in your clinic today.'
     }
   ];
 
   const benefits = [
-    'Streamlined appointment scheduling',
-    'Comprehensive patient records management',
-    'Real-time notifications and updates',
-    'Secure data storage and privacy',
-    'Easy-to-use interface',
-    '24/7 accessibility'
+    'Designed for small clinics & solo doctors',
+    'No complicated setup',
+    'Secure & privacy-first',
+    'Works on any device',
+    'Early users influence product direction'
   ];
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Navigation */}
-      <nav className="bg-white/95 backdrop-blur-lg border-b border-gray-100 sticky top-0 z-50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 h-20 flex justify-between items-center">
+    <div className="min-h-screen bg-white flex flex-col">
+
+      {/* ================= NAVBAR ================= */}
+      <nav className="sticky top-0 z-50 bg-white border-b border-gray-100">
+        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl flex items-center justify-center text-white">
+            <div className="w-11 h-11 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white">
               <Stethoscope className="w-6 h-6" />
             </div>
             <span className="text-xl font-bold">MediNexus</span>
+            <span className="ml-2 px-2 py-1 text-xs font-semibold bg-blue-100 text-blue-700 rounded-full">
+              Early Access
+            </span>
           </div>
-          <div className="flex gap-4">
-            <Link to="/login" className="font-semibold text-gray-700 hover:text-blue-600">
+
+          <div className="flex items-center gap-4">
+            <Link to="/login" className="font-medium text-gray-600 hover:text-blue-600">
               Sign In
             </Link>
-            <Link
-              to="/register"
-              className="px-6 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-bold"
+            <button
+              onClick={() => navigate('/register')}
+              className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700"
             >
               Get Started
-            </Link>
+            </button>
           </div>
         </div>
       </nav>
 
-      {/* Hero */}
+      {/* ================= HERO ================= */}
       <section className="max-w-7xl mx-auto px-6 py-28 text-center">
-        <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-100 text-blue-700 rounded-full mb-6 font-bold">
-          <Star className="w-4 h-4" />
-          Trusted by 10,000+ doctors
-        </div>
         <h1 className="text-6xl font-extrabold mb-6">
-          Transform Your Medical
-          <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">
-            Practice Today
+          Practice Management
+          <span className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">
+            Made Simple
           </span>
         </h1>
+
         <p className="text-xl text-gray-600 max-w-3xl mx-auto mb-10">
-          All-in-one platform to manage appointments, patients, and medical records.
+          MediNexus helps clinics manage appointments, patients,
+          and daily operations — without complexity.
         </p>
+
         <div className="flex justify-center gap-4">
           <button
             onClick={() => navigate('/register')}
             className="px-8 py-4 bg-blue-600 text-white rounded-xl font-bold flex items-center gap-2"
           >
-            Start Free Trial <ArrowRight />
+            Get Early Access <ArrowRight />
           </button>
           <button
             onClick={() => navigate('/login')}
-            className="px-8 py-4 border-2 border-gray-200 rounded-xl font-bold"
+            className="px-8 py-4 border border-gray-300 rounded-xl font-bold"
           >
             Sign In
           </button>
         </div>
       </section>
 
-      {/* Features */}
+      {/* ================= WHO IS THIS FOR ================= */}
       <section className="bg-gray-50 py-24">
-        <div className="max-w-7xl mx-auto px-6 grid md:grid-cols-3 gap-6">
-          {features.map((f, i) => {
-            const Icon = f.icon;
-            return (
-              <div key={i} className="bg-white p-8 rounded-3xl shadow-lg">
-                <div className={`w-16 h-16 ${f.color} rounded-2xl flex items-center justify-center mb-4`}>
-                  <Icon className="w-8 h-8" />
-                </div>
-                <h3 className="text-xl font-bold mb-2">{f.title}</h3>
-                <p className="text-gray-600">{f.description}</p>
-              </div>
-            );
-          })}
+        <div className="max-w-7xl mx-auto px-6 text-center">
+          <h2 className="text-4xl font-extrabold mb-12">
+            Who Is MediNexus For?
+          </h2>
+
+          <div className="grid md:grid-cols-3 gap-8">
+            <div className="bg-white p-8 rounded-3xl shadow">
+              <Users className="w-10 h-10 text-blue-600 mb-4 mx-auto" />
+              <h3 className="text-xl font-bold mb-2">Solo Doctors</h3>
+              <p className="text-gray-600">
+                Manage your practice without extra staff or tools.
+              </p>
+            </div>
+
+            <div className="bg-white p-8 rounded-3xl shadow">
+              <Heart className="w-10 h-10 text-pink-600 mb-4 mx-auto" />
+              <h3 className="text-xl font-bold mb-2">Small Clinics</h3>
+              <p className="text-gray-600">
+                Keep operations smooth and organized.
+              </p>
+            </div>
+
+            <div className="bg-white p-8 rounded-3xl shadow">
+              <Shield className="w-10 h-10 text-green-600 mb-4 mx-auto" />
+              <h3 className="text-xl font-bold mb-2">Growing Practices</h3>
+              <p className="text-gray-600">
+                Start simple, scale confidently.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* Benefits */}
-      <section
-        className="bg-gradient-to-br from-blue-600 to-purple-600 py-24 text-white"
-        style={{
-          backgroundImage:
-            "url(\"data:image/svg+xml,%3Csvg width='60' height='60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2z'/%3E%3C/g%3E%3C/svg%3E\")"
-        }}
-      >
+      {/* ================= HOW IT WORKS ================= */}
+      <section className="py-24">
+        <div className="max-w-6xl mx-auto px-6">
+          <h2 className="text-4xl font-extrabold text-center mb-16">
+            How It Works
+          </h2>
+
+          <div className="grid md:grid-cols-3 gap-10">
+            <div className="text-center">
+              <Clock className="w-12 h-12 text-blue-600 mx-auto mb-4" />
+              <h3 className="text-xl font-bold mb-2">1. Create Account</h3>
+              <p className="text-gray-600">Sign up in less than a minute.</p>
+            </div>
+
+            <div className="text-center">
+              <Calendar className="w-12 h-12 text-indigo-600 mx-auto mb-4" />
+              <h3 className="text-xl font-bold mb-2">2. Add Appointments</h3>
+              <p className="text-gray-600">Start managing your schedule.</p>
+            </div>
+
+            <div className="text-center">
+              <Activity className="w-12 h-12 text-purple-600 mx-auto mb-4" />
+              <h3 className="text-xl font-bold mb-2">3. Run Your Clinic</h3>
+              <p className="text-gray-600">Stay focused on patient care.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ================= BENEFITS ================= */}
+      <section className="bg-gradient-to-br from-blue-600 to-indigo-600 py-24 text-white">
         <div className="max-w-5xl mx-auto px-6 grid lg:grid-cols-2 gap-16">
           <div>
-            <h2 className="text-4xl font-extrabold mb-6">Why Choose MediNexus</h2>
+            <h2 className="text-4xl font-extrabold mb-6">
+              Why Start With MediNexus?
+            </h2>
             <ul className="space-y-4">
               {benefits.map((b, i) => (
                 <li key={i} className="flex gap-3 items-center">
-                  <CheckCircle className="w-6 h-6 text-green-400" />
+                  <CheckCircle className="w-6 h-6 text-green-300" />
                   <span>{b}</span>
                 </li>
               ))}
             </ul>
           </div>
 
-          <div className="bg-white/10 p-10 rounded-3xl text-center">
-            <Zap className="w-12 h-12 mx-auto mb-4 text-yellow-400" />
-            <h3 className="text-2xl font-bold mb-4">Ready to get started?</h3>
+          <div className="bg-white text-gray-900 p-10 rounded-3xl text-center shadow-xl">
+            <Zap className="w-12 h-12 mx-auto mb-4 text-blue-600" />
+            <h3 className="text-2xl font-bold mb-4">Join Early</h3>
+            <p className="text-gray-600 mb-6">
+              Be part of the early users shaping MediNexus.
+            </p>
             <button
               onClick={() => navigate('/register')}
-              className="w-full py-4 bg-white text-blue-600 rounded-xl font-bold"
+              className="w-full py-4 bg-blue-600 text-white rounded-xl font-bold"
             >
-              Create Free Account
+              Get Early Access
             </button>
           </div>
         </div>
       </section>
 
-      {/* CTA */}
-      <section className="py-20 text-center">
-        <h2 className="text-3xl font-extrabold mb-4">Start Managing Smarter Today</h2>
-        <p className="text-gray-600 mb-6">Join thousands of medical professionals worldwide.</p>
-        <button
-          onClick={() => navigate('/register')}
-          className="px-10 py-4 bg-blue-600 text-white rounded-xl font-bold"
-        >
-          Get Started Free
-        </button>
-      </section>
+      {/* ================= FOOTER ================= */}
+      <footer className="bg-gray-900 text-gray-300 py-16 mt-auto">
+        <div className="max-w-7xl mx-auto px-6 grid md:grid-cols-4 gap-10">
+          <div>
+            <h3 className="text-white text-lg font-bold mb-4">MediNexus</h3>
+            <p className="text-sm">
+              Simple practice management for modern clinics.
+            </p>
+          </div>
+
+          {/* <div>
+            <h4 className="text-white font-semibold mb-3">Product</h4>
+            <ul className="space-y-2 text-sm">
+              <li><Link to="/features">Features</Link></li>
+              <li><Link to="/early-access">Early Access</Link></li>
+              <li><Link to="/roadmap">Roadmap</Link></li>
+            </ul>
+          </div> */}
+
+          <div>
+            <h4 className="text-white font-semibold mb-3">Company</h4>
+            <ul className="space-y-2 text-sm">
+              <li><Link to="/about">About</Link></li>
+              <li><Link to="/contact">Contact</Link></li>
+              {/* <li><Link to="/careers">Careers</Link></li> */}
+            </ul>
+
+          </div>
+
+          <div>
+            <h4 className="text-white font-semibold mb-3">Contact</h4>
+            <div className="flex items-center gap-2 text-sm">
+              <Mail className="w-4 h-4" />
+              support@medinexus.com
+            </div>
+          </div>
+        </div>
+
+        <div className="text-center text-sm text-gray-500 mt-10">
+          © {new Date().getFullYear()} MediNexus. All rights reserved.
+        </div>
+      </footer>
+
     </div>
   );
 };
