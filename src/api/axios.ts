@@ -7,28 +7,30 @@ import { encrypt } from '../utils/encryption';
 // Get API base URL from environment variable or use default
 const getApiBaseURL = (): string => {
   // Priority 1: Environment variable (set during build via .env file)
-  if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
-  }
-  
+  // if (import.meta.env.VITE_API_BASE_URL) {
+  //   return import.meta.env.VITE_API_BASE_URL;
+  // }
+
   // Priority 2: Runtime configuration (set in index.html or window object)
-  if (typeof window !== 'undefined' && (window as any).__API_BASE_URL__) {
-    return (window as any).__API_BASE_URL__;
-  }
-  
+  // if (typeof window !== 'undefined' && (window as any).__API_BASE_URL__) {
+  //   return (window as any).__API_BASE_URL__;
+  // }
+
   // Priority 3: Config file
-  if (API_CONFIG.baseURL) {
-    return API_CONFIG.baseURL;
-  }
-  
+  // if (API_CONFIG.baseURL) {
+  //   return API_CONFIG.baseURL;
+  // }
+
   // Priority 4: Default values
   // Development: use localhost
   // Production: use relative URL (same domain as frontend)
-  return import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
+  // return import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
+
+  return `https://doctor-b-dc9j.onrender.com/api`;
 };
 
 const api = axios.create({
-  baseURL: `https://doctor-b-dc9j.onrender.com/api`,
+  baseURL: getApiBaseURL(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -43,21 +45,21 @@ api.interceptors.request.use(
     if (token) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
-    
+
     // Preserve custom headers (like X-Timezone) that might be set in the request
     // These should not be overwritten
-    
+
     // Skip encryption for FormData (file uploads) - FormData should be sent as multipart/form-data
     const isFormData = config.data instanceof FormData;
     const isMultipartFormData = config.headers['Content-Type'] === 'multipart/form-data';
-    
+
     // Only encrypt for 3 specific endpoints: login, register, and password change
     const url = config.url || '';
-    const shouldEncrypt = 
-      url.includes('/auth/login') || 
-      url.includes('/auth/register') || 
+    const shouldEncrypt =
+      url.includes('/auth/login') ||
+      url.includes('/auth/register') ||
       (url.includes('/user/profile') && config.method?.toLowerCase() === 'put' && config.data && typeof config.data === 'object' && 'password' in config.data);
-    
+
     // Encrypt request body only for specific endpoints
     if (config.data && ['post', 'put', 'patch'].includes(config.method?.toLowerCase() || '') && !isFormData && !isMultipartFormData && shouldEncrypt) {
       try {
@@ -71,13 +73,13 @@ api.interceptors.request.use(
         return Promise.reject(error);
       }
     }
-    
+
     // For FormData, let axios set the Content-Type header automatically (it will include boundary)
     if (isFormData) {
       // Remove Content-Type header to let axios set it automatically with boundary
       delete config.headers['Content-Type'];
     }
-    
+
     return config;
   },
   (error) => {
@@ -91,7 +93,7 @@ api.interceptors.response.use(
   (error) => {
     const errorMessage = error.response?.data?.error || error.response?.data?.message || error.message;
     console.error("API Error:", errorMessage);
-    
+
     // Handle 401 Unauthorized - redirect to login
     if (error.response?.status === 401) {
       const state = store.getState();
@@ -102,7 +104,7 @@ api.interceptors.response.use(
         window.location.href = `${basePath}/login`.replace(/\/+/g, '/');
       }
     }
-    
+
     return Promise.reject(error);
   }
 );
