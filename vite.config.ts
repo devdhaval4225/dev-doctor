@@ -1,6 +1,5 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
-import { cloudflare } from "@cloudflare/vite-plugin";
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
@@ -13,7 +12,7 @@ export default defineConfig(({ mode }) => {
         // host: '0.0.0.0',
       },
       plugins: [
-        react() // , cloudflare()
+        react()
       ],
       optimizeDeps: {
         include: ['react', 'react-dom', 'react-redux', '@reduxjs/toolkit', 'recharts'],
@@ -74,10 +73,7 @@ export default defineConfig(({ mode }) => {
                 if (id.includes('react-router')) {
                   return 'router-vendor';
                 }
-                // Recharts - large library, separate chunk
-                if (id.includes('recharts') || id.includes('react-smooth') || id.includes('react-transition-group')) {
-                  return 'charts-vendor';
-                }
+
                 // PDF generation libraries (very large) - separate chunk
                 if (id.includes('jspdf') || id.includes('html2canvas')) {
                   return 'pdf-vendor';
