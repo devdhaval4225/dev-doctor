@@ -26,7 +26,7 @@ const getApiBaseURL = (): string => {
   // Production: use relative URL (same domain as frontend)
   // return import.meta.env.DEV ? 'http://localhost:3000/api' : '/api';
 
-  return `https://doctor-b-dc9j.onrender.com/api`;
+  return `https://doctor-b-5bsm.onrender.com/api`;
 };
 
 const api = axios.create({
