@@ -33,16 +33,18 @@ import { Loader2 } from 'lucide-react';
  */
 export const USE_MOCK_DATA = false;
 
-const Layout = ({ children }) => {
+const Layout = ({ children }: { children?: React.ReactNode }) => {
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar />
-      <div className="flex-1 flex flex-col h-screen overflow-hidden relative">
+
+      <div className="relative flex h-screen flex-1 flex-col overflow-hidden">
         <MobileNav />
-        { <main className="flex-1 overflow-y-auto">
-          {children}
-        </main> }
-        {/* Global AI Chat Assistant - Commented out per request */}
+
+        <main className="flex-1 overflow-y-auto">
+          {children ?? null}
+        </main>
+
         {/* <AIChat /> */}
       </div>
     </div>
@@ -51,42 +53,7 @@ const Layout = ({ children }) => {
 
 const App = () => {
   const { isAuthenticated, token } = useSelector((state: RootState) => state.auth);
-  const [isInitialized, setIsInitialized] = useState(false);
   const dispatch = useDispatch();
-
-  // Ensure auth state is loaded from localStorage before rendering routes
-  useEffect(() => {
-    // Check if we're in browser environment and store is ready
-    if (typeof window !== 'undefined') {
-      // Use requestAnimationFrame to ensure DOM is ready
-      const initCheck = () => {
-        // Store should be initialized synchronously, but give it a moment
-        // to ensure localStorage access is complete
-        setIsInitialized(true);
-      };
-
-      // Use requestAnimationFrame for better timing in production
-      if (window.requestAnimationFrame) {
-        window.requestAnimationFrame(initCheck);
-      } else {
-        setTimeout(initCheck, 10);
-      }
-    } else {
-      setIsInitialized(true);
-    }
-  }, []);
-
-  // Show loading screen while initializing
-  if (!isInitialized) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-600 mx-auto mb-4" />
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
 
   // Get base path from environment or use default
   const basePath = import.meta.env.BASE_URL || '/';
